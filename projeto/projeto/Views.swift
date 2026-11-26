@@ -872,6 +872,7 @@ struct PerfilView: View {
 
 struct MyReviewsListView: View {
     @EnvironmentObject var libraryManager: LibraryManager
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         List {
@@ -894,6 +895,16 @@ struct MyReviewsListView: View {
         }
         .listStyle(.plain)
         .navigationTitle("As minhas avaliações")
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Label("Perfil", systemImage: "chevron.left")
+                }
+            }
+        }
         .task {
             await libraryManager.refreshUserReviews()
         }
@@ -1395,7 +1406,19 @@ struct WriteReviewView: View {
 
 // MARK: - Componente Visual de uma Crítica
 struct ReviewCardView: View {
+    @EnvironmentObject var libraryManager: LibraryManager
     let review: Review
+
+    private var isCurrentUserReview: Bool {
+        guard let currentName = libraryManager.currentUser?.name
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !currentName.isEmpty else {
+            return false
+        }
+
+        return review.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare(currentName) == .orderedSame
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1405,9 +1428,21 @@ struct ReviewCardView: View {
                     .foregroundColor(.gray)
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(review.username)
-                        .font(.subheadline)
-                        .bold()
+                    HStack(spacing: 6) {
+                        Text(review.username)
+                            .font(.subheadline)
+                            .bold()
+
+                        if isCurrentUserReview {
+                            Text("A tua avaliação")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.green)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(Color.green.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                    }
                     
                     HStack(spacing: 2) {
                         ForEach(1...5, id: \.self) { star in
@@ -1429,7 +1464,18 @@ struct ReviewCardView: View {
                 .foregroundColor(.primary)
         }
         .padding()
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(
+            isCurrentUserReview
+                ? Color.green.opacity(0.08)
+                : Color(UIColor.secondarySystemBackground)
+        )
         .cornerRadius(12)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(
+                    isCurrentUserReview ? Color.green.opacity(0.45) : .clear,
+                    lineWidth: 1.5
+                )
+        }
     }
 }

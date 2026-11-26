@@ -502,6 +502,7 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
                 db.books
                   .filter((b) => normalizeTitle(b.title) === normalizedTargetTitle)
                   .map((b) => b.id)
+                  .limit(5)
               )
             : new Set();
 

@@ -1,0 +1,214 @@
+{
+  "users": [
+    {
+      "id": "4bfb8549-7529-42f4-b3ea-0edadb83430f",
+      "name": "Teste",
+      "email": "dasdasdas@gmail.com",
+      "passwordHash": "912b39f71f534dbbb8f0f2234778e0aa:5c9a06459543c8cee98354ad3c7093995e35df0ccff9513b80a751b8869826d93be726c6ab2256c8c3dc4b30a1b1a7092a99140b25ff480f10ed37f055267525",
+      "createdAt": "2026-11-26T18:23:25.942Z"
+    },
+    {
+      "id": "9428b0ea-6e0a-42d2-9366-63372134e551",
+      "name": "Teste2",
+      "email": "dsaddsafew@gmail.com",
+      "passwordHash": "d05d261efd3e50f9671f7e899818b2b3:ee1326ee693368ffac57f44214b4204204b48fa0304c65dcd0a8163111f13e3a1188da05f55b66c2a63404ed04a91b0789ad9250ee6f915ccca750a91140ceaf",
+      "createdAt": "2026-11-26T18:24:35.612Z"
+    },
+    {
+      "id": "11a922b6-edae-4151-9c14-3da7135eb763",
+      "name": "Teste",
+      "email": "teste@gmail.com",
+      "passwordHash": "358dbcada4c41f2c06e716634662033e:e7385cde80e9eacd282625912b3552bb3bf173d190f7aac758ad9b49a79f259b65b8fe03393523104c2f51af01d56b1d4554b43b5b674c983c6bae3d98428511",
+      "createdAt": "2026-11-26T18:30:31.964Z"
+    },
+    {
+      "id": "e40c8ae9-6872-4e1c-822d-3ec9fa2479c4",
+      "name": "Teste2",
+      "email": "teste2@gmail.com",
+      "passwordHash": "4748a67e1bd9bf3636931ea3902f8a84:da172db2090f9983fffddd1bfd164cc7a5d0faa13f05b17f6c92f6c247adae86b399e94ace4cbac47e670fce76f5c82aca134d7a92ddc603cdaa2e40eac68ebf",
+      "createdAt": "2026-11-26T18:33:51.732Z"
+    },
+    {
+      "id": "dd148894-3c3f-4fde-a040-6b14ef4fe789",
+      "name": "Teste",
+      "email": "teste@teste",
+      "passwordHash": "58db2383e4bf92db99c7a67a4d416b3d:6c28bd5984e9e7e06d76b321720192b4e311e81b6c0f58df96a473067fa9220e0506adaf3fd15b6985b46338c989c554d146b7cc4f749a6b5baf3801a0e57c05",
+      "createdAt": "2026-11-26T18:35:23.587Z"
+    }
+  ],
+  "sessions": {
+    "23de7c2e6367563b3a421f06e3f022fb768c8e8fa81a189ae443c5281e765a02": "e40c8ae9-6872-4e1c-822d-3ec9fa2479c4"
+  },
+  "books": [
+    {
+      "id": "6B454812-0145-42C7-8CEF-CC2372CD3803",
+      "title": "Dune",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "isbn": "6B454812-0145-42C7-8CEF-CC2372CD3803",
+      "coverURL": "https://covers.openlibrary.org/b/id/11481354-M.jpg",
+      "status": "Com interesse",
+      "userRating": 1
+    },
+    {
+      "id": "5EC2A520-E1B0-4ABC-97EB-093F4EFF229A",
+      "title": "Infinite Jest",
+      "authors": [
+        "David Foster Wallace"
+      ],
+      "isbn": "5EC2A520-E1B0-4ABC-97EB-093F4EFF229A",
+      "coverURL": "https://covers.openlibrary.org/b/id/8237639-M.jpg",
+      "status": "A ler",
+      "userRating": 4
+    },
+    {
+      "userId": "4bfb8549-7529-42f4-b3ea-0edadb83430f",
+      "id": "917C6075-43F1-4CA4-93A2-9A237B789E8C",
+      "title": "Dune",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "isbn": "917C6075-43F1-4CA4-93A2-9A237B789E8C",
+      "coverURL": "https://covers.openlibrary.org/b/id/11481354-M.jpg",
+      "status": "Lido",
+      "userRating": 4
+    },
+    {
+      "userId": "9428b0ea-6e0a-42d2-9366-63372134e551",
+      "id": "OL893414W",
+      "title": "Dune",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "isbn": "",
+      "coverURL": "https://covers.openlibrary.org/b/id/11481354-M.jpg",
+      "status": "Com interesse",
+      "userRating": 5
+    },
+    {
+      "userId": "11a922b6-edae-4151-9c14-3da7135eb763",
+      "id": "OL893414W",
+      "title": "Dune",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "isbn": "",
+      "coverURL": "https://covers.openlibrary.org/b/id/11481354-M.jpg",
+      "status": "Com interesse",
+      "userRating": 4
+    },
+    {
+      "userId": "e40c8ae9-6872-4e1c-822d-3ec9fa2479c4",
+      "id": "OL893414W",
+      "title": "Dune",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "isbn": "",
+      "coverURL": "https://covers.openlibrary.org/b/id/11481354-M.jpg",
+      "status": "Lido",
+      "userRating": 4
+    },
+    {
+      "userId": "dd148894-3c3f-4fde-a040-6b14ef4fe789",
+      "id": "OL893414W",
+      "title": "Dune",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "isbn": "",
+      "coverURL": "https://covers.openlibrary.org/b/id/11481354-M.jpg",
+      "status": "Com interesse",
+      "userRating": 4
+    },
+    {
+      "userId": "dd148894-3c3f-4fde-a040-6b14ef4fe789",
+      "id": "OL893516W",
+      "title": "Children of Dune",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "isbn": "",
+      "coverURL": "https://covers.openlibrary.org/b/id/6976407-M.jpg",
+      "status": "Lido",
+      "userRating": 4
+    }
+  ],
+  "reviews": [
+    {
+      "id": "0036100E-93D6-43C0-837E-7ABAAB266175",
+      "userId": "dd148894-3c3f-4fde-a040-6b14ef4fe789",
+      "bookId": "OL893516W",
+      "bookTitle": "Children of Dune",
+      "username": "Teste",
+      "content": "Lokiujyhtgbvf",
+      "rating": 4,
+      "date": "2026-11-26T18:47:26.000Z"
+    },
+    {
+      "id": "0BE200E6-93D2-4FCF-9B68-37D365569248",
+      "userId": "dd148894-3c3f-4fde-a040-6b14ef4fe789",
+      "bookId": "OL893414W",
+      "bookTitle": "Dune",
+      "username": "Teste",
+      "content": "Crittica",
+      "rating": 4,
+      "date": "2026-11-26T18:46:36.000Z"
+    },
+    {
+      "id": "B4F4F5F8-7EBA-48C4-872E-729A34BBB459",
+      "userId": "e40c8ae9-6872-4e1c-822d-3ec9fa2479c4",
+      "bookId": "OL893414W",
+      "bookTitle": "Dune",
+      "username": "Teste2",
+      "content": "Dsnosanfosno",
+      "rating": 4,
+      "date": "2026-11-26T18:34:52.000Z"
+    },
+    {
+      "id": "70FA5119-2454-4E52-BBB5-94F19FD8CA10",
+      "userId": "11a922b6-edae-4151-9c14-3da7135eb763",
+      "bookId": "OL893414W",
+      "bookTitle": "Dune",
+      "username": "Teste",
+      "content": "Ujk7ukiuk7i",
+      "rating": 4,
+      "date": "2026-11-26T18:32:58.000Z"
+    },
+    {
+      "id": "D341D4E6-E7EB-42B2-951B-BE55B8178981",
+      "userId": "9428b0ea-6e0a-42d2-9366-63372134e551",
+      "bookId": "OL893414W",
+      "username": "Teste2",
+      "content": "Aaaaa",
+      "rating": 5,
+      "date": "2026-11-26T18:29:55.000Z"
+    },
+    {
+      "id": "28125BF3-8275-45F2-9A23-CEEAE8E9E871",
+      "userId": "4bfb8549-7529-42f4-b3ea-0edadb83430f",
+      "bookId": "917C6075-43F1-4CA4-93A2-9A237B789E8C",
+      "username": "Teste",
+      "content": "Bom",
+      "rating": 4,
+      "date": "2026-11-26T18:24:01.000Z"
+    },
+    {
+      "id": "5D8DE2C0-2AC7-4398-87C8-134D983E3C74",
+      "bookId": "5EC2A520-E1B0-4ABC-97EB-093F4EFF229A",
+      "username": "Hugo Marques",
+      "content": "Teste review",
+      "rating": 4,
+      "date": "2026-11-26T18:12:18.000Z"
+    },
+    {
+      "id": "E6C3DEFE-BC69-4900-8F01-476AB976CCC0",
+      "bookId": "6B454812-0145-42C7-8CEF-CC2372CD3803",
+      "username": "Hugo Marques",
+      "content": "Comentario",
+      "rating": 1,
+      "date": "2026-11-26T18:06:13.000Z"
+    }
+  ]
+}
