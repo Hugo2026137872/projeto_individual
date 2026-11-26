@@ -1,0 +1,12 @@
+{
+  "name": "booknest-webserver",
+  "version": "1.0.0",
+  "description": "REST API server for the BookNest iOS application",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test test/server.test.js"
+  }
+}
