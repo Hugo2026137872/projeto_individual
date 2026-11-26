@@ -233,7 +233,7 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
         return;
       }
 
-      // PATCH or DELETE /api/books/:bookId
+      // GET, PATCH, or DELETE /api/books/:bookId
       if (pathname.startsWith("/api/books/")) {
         const encodedId = pathname.slice("/api/books/".length);
         const bookId = decodeURIComponent(encodedId);
@@ -244,6 +244,15 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
 
         const db = loadDatabase(dbPath);
         const bookIndex = db.books.findIndex((b) => b.id === bookId);
+
+        if (method === "GET") {
+          if (bookIndex === -1) {
+            sendJSON(res, 404, { error: "Book not found." });
+            return;
+          }
+          sendJSON(res, 200, db.books[bookIndex]);
+          return;
+        }
 
         if (method === "PATCH") {
           if (bookIndex === -1) {
@@ -287,13 +296,21 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
         }
       }
 
-      // GET /api/reviews (optional ?bookId=...)
+      // GET /api/reviews (optional ?bookId=... and/or ?username=...)
       if (method === "GET" && pathname === "/api/reviews") {
         const db = loadDatabase(dbPath);
         const bookIdFilter = requestUrl.searchParams.get("bookId");
-        const reviews = bookIdFilter
-          ? db.reviews.filter((r) => r.bookId === bookIdFilter)
-          : db.reviews;
+        const usernameFilter = requestUrl.searchParams.get("username");
+
+        let reviews = db.reviews;
+        if (bookIdFilter) {
+          reviews = reviews.filter((r) => r.bookId === bookIdFilter);
+        }
+        if (usernameFilter) {
+          reviews = reviews.filter(
+            (r) => r.username.toLowerCase() === usernameFilter.toLowerCase()
+          );
+        }
         sendJSON(res, 200, reviews);
         return;
       }

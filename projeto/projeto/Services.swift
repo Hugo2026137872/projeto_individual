@@ -185,11 +185,14 @@ enum RepositoryError: LocalizedError {
 // MARK: - Repository Pattern (Local Persistence + Web Server)
 protocol BookRepository {
     func fetchBooks() async throws -> [Book]
+    func fetchBook(bookId: String) async throws -> Book?
     func saveBook(_ book: Book) async throws
     func updateBookStatus(bookId: String, status: ReadingStatus) async throws
     func deleteBook(bookId: String) async throws
     
     func fetchReviews() async throws -> [Review]
+    func fetchReviews(bookId: String) async throws -> [Review]
+    func fetchReviews(username: String) async throws -> [Review]
     func saveReview(_ review: Review) async throws
 }
 
@@ -200,6 +203,11 @@ class LocalBookRepository: BookRepository {
     func fetchBooks() async throws -> [Book] {
         guard let data = UserDefaults.standard.data(forKey: booksKey) else { return [] }
         return (try? JSONDecoder().decode([Book].self, from: data)) ?? []
+    }
+    
+    func fetchBook(bookId: String) async throws -> Book? {
+        let books = try await fetchBooks()
+        return books.first(where: { $0.id == bookId })
     }
     
     func saveBook(_ book: Book) async throws {
@@ -235,6 +243,16 @@ class LocalBookRepository: BookRepository {
         return (try? JSONDecoder().decode([Review].self, from: data)) ?? []
     }
     
+    func fetchReviews(bookId: String) async throws -> [Review] {
+        let reviews = try await fetchReviews()
+        return reviews.filter { $0.bookId == bookId }
+    }
+    
+    func fetchReviews(username: String) async throws -> [Review] {
+        let reviews = try await fetchReviews()
+        return reviews.filter { $0.username.caseInsensitiveCompare(username) == .orderedSame }
+    }
+    
     func saveReview(_ review: Review) async throws {
         var current = try await fetchReviews()
         current.insert(review, at: 0)
@@ -261,12 +279,22 @@ class RemoteBookRepository: BookRepository {
         return decoder
     }
     
-    private func makeURL(pathComponents: [String] = []) throws -> URL {
+    private func makeURL(pathComponents: [String] = [], queryItems: [URLQueryItem] = []) throws -> URL {
         guard var url = URL(string: baseURLString) else {
             throw RepositoryError.invalidURL
         }
         for component in pathComponents {
             url.appendPathComponent(component)
+        }
+        if !queryItems.isEmpty {
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                throw RepositoryError.invalidURL
+            }
+            components.queryItems = queryItems
+            guard let finalURL = components.url else {
+                throw RepositoryError.invalidURL
+            }
+            return finalURL
         }
         return url
     }
@@ -310,6 +338,16 @@ class RemoteBookRepository: BookRepository {
         return try makeDecoder().decode([Book].self, from: data)
     }
     
+    func fetchBook(bookId: String) async throws -> Book? {
+        let url = try makeURL(pathComponents: ["books", bookId])
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
+            return nil
+        }
+        try validateResponse(response)
+        return try makeDecoder().decode(Book.self, from: data)
+    }
+    
     func saveBook(_ book: Book) async throws {
         let url = try makeURL(pathComponents: ["books"])
         let body = try makeEncoder().encode(book)
@@ -337,6 +375,26 @@ class RemoteBookRepository: BookRepository {
         return try makeDecoder().decode([Review].self, from: data)
     }
     
+    func fetchReviews(bookId: String) async throws -> [Review] {
+        let url = try makeURL(
+            pathComponents: ["reviews"],
+            queryItems: [URLQueryItem(name: "bookId", value: bookId)]
+        )
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
+        try validateResponse(response)
+        return try makeDecoder().decode([Review].self, from: data)
+    }
+    
+    func fetchReviews(username: String) async throws -> [Review] {
+        let url = try makeURL(
+            pathComponents: ["reviews"],
+            queryItems: [URLQueryItem(name: "username", value: username)]
+        )
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
+        try validateResponse(response)
+        return try makeDecoder().decode([Review].self, from: data)
+    }
+    
     func saveReview(_ review: Review) async throws {
         let url = try makeURL(pathComponents: ["reviews"])
         let body = try makeEncoder().encode(review)
@@ -350,8 +408,11 @@ class RemoteBookRepository: BookRepository {
 class LibraryManager: ObservableObject {
     @Published var books: [Book] = []
     @Published var reviews: [Review] = []
+    @Published var userReviews: [Review] = []
     @Published var isLoadingData: Bool = false
     @Published var errorMessage: String? = nil
+    
+    let currentUsername = "Hugo Marques"
     
     @Published var searchPath = NavigationPath()
     @Published var recommendationsPath = NavigationPath()
@@ -379,11 +440,68 @@ class LibraryManager: ObservableObject {
         do {
             async let fetchedBooks = repository.fetchBooks()
             async let fetchedReviews = repository.fetchReviews()
+            async let fetchedUserReviews = repository.fetchReviews(username: currentUsername)
             self.books = try await fetchedBooks
             self.reviews = try await fetchedReviews
+            self.userReviews = try await fetchedUserReviews
         } catch {
             self.errorMessage = "Erro ao ligar ao servidor: \(error.localizedDescription)"
             print("Erro ao carregar dados: \(error.localizedDescription)")
+        }
+        isLoadingData = false
+    }
+    
+    func refreshBooks() async {
+        isLoadingData = true
+        do {
+            self.books = try await repository.fetchBooks()
+            errorMessage = nil
+        } catch {
+            self.errorMessage = "Erro ao carregar biblioteca: \(error.localizedDescription)"
+        }
+        isLoadingData = false
+    }
+    
+    func refreshBookDetails(bookId: String) async {
+        do {
+            async let fetchedBook = repository.fetchBook(bookId: bookId)
+            async let fetchedReviews = repository.fetchReviews(bookId: bookId)
+            
+            if let updatedBook = try await fetchedBook {
+                if let index = books.firstIndex(where: { $0.id == bookId }) {
+                    books[index] = updatedBook
+                } else {
+                    books.append(updatedBook)
+                }
+            }
+            
+            let bookReviews = try await fetchedReviews
+            reviews.removeAll { $0.bookId == bookId }
+            reviews.insert(contentsOf: bookReviews, at: 0)
+            errorMessage = nil
+        } catch {
+            self.errorMessage = "Erro ao carregar detalhes do livro: \(error.localizedDescription)"
+        }
+    }
+    
+    func refreshReviewsForBook(bookId: String) async {
+        do {
+            let bookReviews = try await repository.fetchReviews(bookId: bookId)
+            reviews.removeAll { $0.bookId == bookId }
+            reviews.insert(contentsOf: bookReviews, at: 0)
+            errorMessage = nil
+        } catch {
+            self.errorMessage = "Erro ao carregar críticas: \(error.localizedDescription)"
+        }
+    }
+    
+    func refreshUserReviews() async {
+        isLoadingData = true
+        do {
+            self.userReviews = try await repository.fetchReviews(username: currentUsername)
+            errorMessage = nil
+        } catch {
+            self.errorMessage = "Erro ao carregar as tuas avaliações: \(error.localizedDescription)"
         }
         isLoadingData = false
     }
@@ -434,9 +552,13 @@ class LibraryManager: ObservableObject {
         }
     }
     
-    func addReview(bookId: String, username: String = "Hugo Marques", content: String, rating: Int) {
-        let newReview = Review(bookId: bookId, username: username, content: content, rating: rating)
+    func addReview(bookId: String, username: String? = nil, content: String, rating: Int) {
+        let authorName = username ?? currentUsername
+        let newReview = Review(bookId: bookId, username: authorName, content: content, rating: rating)
         reviews.insert(newReview, at: 0)
+        if authorName.caseInsensitiveCompare(currentUsername) == .orderedSame {
+            userReviews.insert(newReview, at: 0)
+        }
         
         if let index = books.firstIndex(where: { $0.id == bookId }) {
             books[index].userRating = rating

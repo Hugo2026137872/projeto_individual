@@ -60,6 +60,15 @@ test("BookNest API CRUD lifecycle and persistence", async () => {
     const createdBook = await createBookRes.json();
     assert.equal(createdBook.id, sampleBook.id);
 
+    // 3b. Fetch individual book from library (GET /api/books/:bookId)
+    const getBookRes = await fetch(`${baseURL}/books/${sampleBook.id}`);
+    assert.equal(getBookRes.status, 200);
+    const fetchedBook = await getBookRes.json();
+    assert.equal(fetchedBook.title, sampleBook.title);
+
+    const missingBookRes = await fetch(`${baseURL}/books/non-existent-id`);
+    assert.equal(missingBookRes.status, 404);
+
     // 4. Update book status
     const patchRes = await fetch(`${baseURL}/books/${sampleBook.id}`, {
       method: "PATCH",
@@ -94,6 +103,20 @@ test("BookNest API CRUD lifecycle and persistence", async () => {
     const reviewsAfterCreate = await (await fetch(`${baseURL}/reviews`)).json();
     assert.equal(reviewsAfterCreate.length, 1);
     assert.equal(reviewsAfterCreate[0].content, sampleReview.content);
+
+    // 5b. Filter reviews by bookId and by username
+    const bookReviewsRes = await fetch(`${baseURL}/reviews?bookId=${encodeURIComponent(sampleBook.id)}`);
+    assert.equal(bookReviewsRes.status, 200);
+    const bookReviews = await bookReviewsRes.json();
+    assert.equal(bookReviews.length, 1);
+
+    const userReviewsRes = await fetch(`${baseURL}/reviews?username=${encodeURIComponent("Hugo Marques")}`);
+    assert.equal(userReviewsRes.status, 200);
+    const userReviews = await userReviewsRes.json();
+    assert.equal(userReviews.length, 1);
+
+    const otherUserReviews = await (await fetch(`${baseURL}/reviews?username=Outro`)).json();
+    assert.deepEqual(otherUserReviews, []);
 
     // 6. Verify persisted file on disk
     const persisted = JSON.parse(fs.readFileSync(dbPath, "utf8"));

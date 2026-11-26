@@ -511,6 +511,9 @@ struct BibliotecaView: View {
             .sheet(isPresented: $mostrarScanner) {
                 ScanContainerView()
             }
+            .task {
+                await libraryManager.refreshBooks()
+            }
         }
     }
 }
@@ -634,6 +637,9 @@ struct LibraryBookDetailView: View {
             .padding()
         }
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: book.id) {
+            await libraryManager.refreshBookDetails(bookId: book.id)
+        }
     }
     
     func iconForStatus(_ status: ReadingStatus) -> String {
@@ -712,11 +718,18 @@ struct MyReviewsListView: View {
     
     var body: some View {
         List {
-            if libraryManager.reviews.isEmpty {
+            if libraryManager.isLoadingData && libraryManager.userReviews.isEmpty {
+                HStack {
+                    Spacer()
+                    ProgressView("A carregar avaliações...")
+                    Spacer()
+                }
+                .listRowSeparator(.hidden)
+            } else if libraryManager.userReviews.isEmpty {
                 Text("Ainda não escreveste nenhuma avaliação.")
                     .foregroundColor(.secondary)
             } else {
-                ForEach(libraryManager.reviews) { review in
+                ForEach(libraryManager.userReviews) { review in
                     ReviewCardView(review: review)
                         .listRowSeparator(.hidden)
                 }
@@ -724,6 +737,12 @@ struct MyReviewsListView: View {
         }
         .listStyle(.plain)
         .navigationTitle("As minhas avaliações")
+        .task {
+            await libraryManager.refreshUserReviews()
+        }
+        .refreshable {
+            await libraryManager.refreshUserReviews()
+        }
     }
 }
 
@@ -995,6 +1014,9 @@ struct BookDetailView: View {
         }
         .navigationTitle("Detalhes")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: book.id) {
+            await libraryManager.refreshReviewsForBook(bookId: book.id)
+        }
         .fullScreenCover(isPresented: $mostrarSucesso) {
             EcraSucessoView(tituloLivro: book.title)
         }
