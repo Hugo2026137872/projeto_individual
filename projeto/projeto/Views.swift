@@ -1204,9 +1204,6 @@ struct BookDetailView: View {
         }
         .navigationTitle("Detalhes")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: book.id) {
-            await loadBookReviews()
-        }
         .onAppear {
             Task { await loadBookReviews() }
         }

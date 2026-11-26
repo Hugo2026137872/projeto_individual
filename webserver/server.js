@@ -65,6 +65,7 @@ function sendJSON(res, statusCode, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization"
@@ -246,7 +247,7 @@ function normalizeReview(input, user) {
 }
 
 export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) {
-  loadDatabase(dbPath);
+  const db = loadDatabase(dbPath);
 
   const server = http.createServer(async (req, res) => {
     const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -265,7 +266,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
     try {
       // Health check
       if (method === "GET" && (pathname === "/api/health" || pathname === "/health")) {
-        const db = loadDatabase(dbPath);
         sendJSON(res, 200, {
           status: "ok",
           usersCount: db.users.length,
@@ -295,7 +295,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
           return;
         }
 
-        const db = loadDatabase(dbPath);
         if (db.users.some((u) => u.email.toLowerCase() === email)) {
           sendJSON(res, 409, { error: "Já existe uma conta registada com este email." });
           return;
@@ -328,7 +327,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
           return;
         }
 
-        const db = loadDatabase(dbPath);
         const user = db.users.find((u) => u.email.toLowerCase() === email);
         if (!user || !verifyPassword(password, user.passwordHash)) {
           sendJSON(res, 401, { error: "Email ou palavra-passe inválidos." });
@@ -346,12 +344,9 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
       // POST /api/auth/logout
       if (method === "POST" && pathname === "/api/auth/logout") {
         const token = extractBearerToken(req);
-        if (token) {
-          const db = loadDatabase(dbPath);
-          if (db.sessions[token]) {
-            delete db.sessions[token];
-            saveDatabase(dbPath, db);
-          }
+        if (token && db.sessions[token]) {
+          delete db.sessions[token];
+          saveDatabase(dbPath, db);
         }
         sendNoContent(res);
         return;
@@ -359,7 +354,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
 
       // GET /api/auth/me
       if (method === "GET" && pathname === "/api/auth/me") {
-        const db = loadDatabase(dbPath);
         const user = getAuthenticatedUser(req, db);
         if (!user) {
           sendJSON(res, 401, { error: "Sessão inválida ou expirada." });
@@ -371,7 +365,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
 
       // GET /api/books (authenticated user's library)
       if (method === "GET" && pathname === "/api/books") {
-        const db = loadDatabase(dbPath);
         const user = getAuthenticatedUser(req, db);
         if (!user) {
           sendJSON(res, 401, { error: "Autenticação necessária." });
@@ -386,7 +379,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
 
       // POST /api/books (add book to authenticated user's library)
       if (method === "POST" && pathname === "/api/books") {
-        const db = loadDatabase(dbPath);
         const user = getAuthenticatedUser(req, db);
         if (!user) {
           sendJSON(res, 401, { error: "Autenticação necessária." });
@@ -415,7 +407,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
 
       // GET, PATCH, or DELETE /api/books/:bookId
       if (pathname.startsWith("/api/books/")) {
-        const db = loadDatabase(dbPath);
         const user = getAuthenticatedUser(req, db);
         if (!user) {
           sendJSON(res, 401, { error: "Autenticação necessária." });
@@ -429,26 +420,26 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
           return;
         }
 
-        const bookIndex = db.books.findIndex(
-          (b) => b.userId === user.id && b.id === bookId
-        );
-
         if (method === "GET") {
-          if (bookIndex === -1) {
+          const found = db.books.find((b) => b.userId === user.id && b.id === bookId);
+          if (!found) {
             sendJSON(res, 404, { error: "Book not found." });
             return;
           }
-          sendJSON(res, 200, sanitizeBook(db.books[bookIndex]));
+          sendJSON(res, 200, sanitizeBook(found));
           return;
         }
 
         if (method === "PATCH") {
+          const body = await readRequestBody(req);
+          const bookIndex = db.books.findIndex(
+            (b) => b.userId === user.id && b.id === bookId
+          );
           if (bookIndex === -1) {
             sendJSON(res, 404, { error: "Book not found." });
             return;
           }
 
-          const body = await readRequestBody(req);
           if (body.status !== undefined) {
             if (typeof body.status !== "string" || !VALID_STATUSES.has(body.status)) {
               sendJSON(res, 400, {
@@ -473,6 +464,9 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
         }
 
         if (method === "DELETE") {
+          const bookIndex = db.books.findIndex(
+            (b) => b.userId === user.id && b.id === bookId
+          );
           if (bookIndex === -1) {
             sendJSON(res, 404, { error: "Book not found." });
             return;
@@ -486,7 +480,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
 
       // GET /api/reviews (optional ?bookId=..., ?title=..., ?username=..., or ?mine=true)
       if (method === "GET" && pathname === "/api/reviews") {
-        const db = loadDatabase(dbPath);
         const user = getAuthenticatedUser(req, db);
         if (!user) {
           sendJSON(res, 401, { error: "Autenticação necessária." });
@@ -538,7 +531,6 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
 
       // POST /api/reviews
       if (method === "POST" && pathname === "/api/reviews") {
-        const db = loadDatabase(dbPath);
         const user = getAuthenticatedUser(req, db);
         if (!user) {
           sendJSON(res, 401, { error: "Autenticação necessária." });

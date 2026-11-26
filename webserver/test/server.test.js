@@ -205,7 +205,7 @@ test("BookNest auth, multi-user library isolation, and reviews", async () => {
     })).json();
     assert.equal(mariaBookAfterReview.userRating, 5);
 
-    // 11. Logout invalidates token
+    // 11. Logout invalidates token, but keeps user's books & reviews intact upon re-login
     const logoutRes = await fetch(`${baseURL}/auth/logout`, {
       method: "POST",
       headers: { Authorization: `Bearer ${mariaToken}` }
@@ -216,6 +216,25 @@ test("BookNest auth, multi-user library isolation, and reviews", async () => {
       headers: { Authorization: `Bearer ${mariaToken}` }
     });
     assert.equal(meAfterLogout.status, 401);
+
+    const reloginRes = await fetch(`${baseURL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "maria@example.com", password: "secret123" })
+    });
+    assert.equal(reloginRes.status, 200);
+    const reloginData = await reloginRes.json();
+
+    const mariaBooksAfterRelogin = await (await fetch(`${baseURL}/books`, {
+      headers: { Authorization: `Bearer ${reloginData.token}` }
+    })).json();
+    assert.equal(mariaBooksAfterRelogin.length, 1);
+    assert.equal(mariaBooksAfterRelogin[0].title, "Clean Code");
+
+    const mariaReviewsAfterRelogin = await (await fetch(`${baseURL}/reviews?mine=true`, {
+      headers: { Authorization: `Bearer ${reloginData.token}` }
+    })).json();
+    assert.equal(mariaReviewsAfterRelogin.length, 1);
 
     // 12. Verify persistence on disk
     const persisted = JSON.parse(fs.readFileSync(dbPath, "utf8"));

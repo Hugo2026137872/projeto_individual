@@ -290,6 +290,7 @@ class AuthService {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 15
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -426,7 +427,27 @@ class RemoteBookRepository: BookRepository {
     
     private func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let dateString = try container.decode(String.self)
+            
+            let fractionalFormatter = ISO8601DateFormatter()
+            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = fractionalFormatter.date(from: dateString) {
+                return date
+            }
+            
+            let standardFormatter = ISO8601DateFormatter()
+            standardFormatter.formatOptions = [.withInternetDateTime]
+            if let date = standardFormatter.date(from: dateString) {
+                return date
+            }
+            
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid ISO8601 date string: \(dateString)"
+            )
+        }
         return decoder
     }
     
@@ -454,6 +475,7 @@ class RemoteBookRepository: BookRepository {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 15
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         if let token = AuthSession.token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -601,6 +623,7 @@ class LibraryManager: ObservableObject {
     
     private let repository: BookRepository
     private let authService: AuthService
+    private var pendingBookMutations = 0
     
     init(repository: BookRepository = RemoteBookRepository(), authService: AuthService = AuthService()) {
         self.repository = repository
@@ -685,9 +708,13 @@ class LibraryManager: ObservableObject {
     
     func refreshBooks() async {
         guard isAuthenticated else { return }
+        if pendingBookMutations > 0 { return }
         isLoadingData = true
         do {
-            self.books = try await repository.fetchBooks()
+            let fetchedBooks = try await repository.fetchBooks()
+            if pendingBookMutations == 0 {
+                self.books = fetchedBooks
+            }
             errorMessage = nil
         } catch RepositoryError.unauthorized {
             clearLocalSession()
@@ -776,7 +803,9 @@ class LibraryManager: ObservableObject {
     func addBook(_ book: Book) {
         guard !books.contains(where: { $0.id == book.id }) else { return }
         books.append(book)
+        pendingBookMutations += 1
         Task {
+            defer { pendingBookMutations = max(0, pendingBookMutations - 1) }
             do {
                 try await repository.saveBook(book)
                 errorMessage = nil
@@ -791,7 +820,9 @@ class LibraryManager: ObservableObject {
     func updateStatus(for bookId: String, status: ReadingStatus) {
         if let index = books.firstIndex(where: { $0.id == bookId }) {
             books[index].status = status
+            pendingBookMutations += 1
             Task {
+                defer { pendingBookMutations = max(0, pendingBookMutations - 1) }
                 do {
                     try await repository.updateBookStatus(bookId: bookId, status: status)
                     errorMessage = nil
@@ -806,7 +837,9 @@ class LibraryManager: ObservableObject {
     
     func removeBook(bookId: String) {
         books.removeAll { $0.id == bookId }
+        pendingBookMutations += 1
         Task {
+            defer { pendingBookMutations = max(0, pendingBookMutations - 1) }
             do {
                 try await repository.deleteBook(bookId: bookId)
                 errorMessage = nil
