@@ -812,81 +812,83 @@ private enum ProfileDestination: Hashable {
 
 struct PerfilView: View {
     @EnvironmentObject var libraryManager: LibraryManager
-    
+
     var body: some View {
         NavigationStack(path: $libraryManager.profilePath) {
-            List {
-                HStack(spacing: 16) {
-                    Image(systemName: "person.circle.fill")
-                        .resizable()
-                        .frame(width: 60, height: 60)
-                        .foregroundColor(.gray.opacity(0.5))
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(libraryManager.currentUser?.name ?? "Utilizador")
-                            .font(.title2)
-                            .bold()
-                        Text(libraryManager.currentUser?.email ?? "")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+            VStack(spacing: 0) {
+                List {
+                    HStack(spacing: 16) {
+                        Image(systemName: "person.circle.fill")
+                            .resizable()
+                            .frame(width: 60, height: 60)
+                            .foregroundColor(.gray.opacity(0.5))
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(libraryManager.currentUser?.name ?? "Utilizador")
+                                .font(.title2)
+                                .bold()
+                            Text(libraryManager.currentUser?.email ?? "")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+
+                    Section {
+                        Button(action: { libraryManager.selectedTab = 3 }) {
+                            Label("A minha biblioteca", systemImage: "book")
+                                .foregroundColor(.primary)
+                        }
+                        NavigationLink(value: ProfileDestination.reviews) {
+                            Label("As minhas avaliações", systemImage: "star")
+                        }
+                        NavigationLink(value: ProfileDestination.likes) {
+                            Label("Os meus gostos", systemImage: "heart")
+                        }
+                        NavigationLink(value: ProfileDestination.settings) {
+                            Label("Definições", systemImage: "gearshape")
+                        }
+                    }
+
+                    Section(header: Text("Modelo de IA")) {
+                        NavigationLink(value: ProfileDestination.aiModel) {
+                            Label("Gemma 4 (Ollama)", systemImage: "cpu")
+                        }
+                    }
+
+                    Section(header: Text("Privacidade")) {
+                        NavigationLink(value: ProfileDestination.dataManagement) {
+                            Label("Gestão de dados", systemImage: "lock.shield")
+                        }
+                    }
+
+                    Section {
+                        Button(role: .destructive) {
+                            Task { await libraryManager.logout() }
+                        } label: {
+                            Label("Terminar sessão", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
                     }
                 }
-                .padding(.vertical, 8)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                
-                Section {
-                    Button(action: { libraryManager.selectedTab = 3 }) {
-                        Label("A minha biblioteca", systemImage: "book")
-                            .foregroundColor(.primary)
-                    }
-                    NavigationLink(value: ProfileDestination.reviews) {
-                        Label("As minhas avaliações", systemImage: "star")
-                    }
-                    NavigationLink(value: ProfileDestination.likes) {
-                        Label("Os meus gostos", systemImage: "heart")
-                    }
-                    NavigationLink(value: ProfileDestination.settings) {
-                        Label("Definições", systemImage: "gearshape")
-                    }
-                }
-                
-                Section(header: Text("Modelo de IA")) {
-                    NavigationLink(value: ProfileDestination.aiModel) {
-                        Label("Gemma 4 (Ollama)", systemImage: "cpu")
-                    }
-                }
-                
-                Section(header: Text("Privacidade")) {
-                    NavigationLink(value: ProfileDestination.dataManagement) {
-                        Label("Gestão de dados", systemImage: "lock.shield")
-                    }
-                }
-                
-                Section {
-                    Button(role: .destructive) {
-                        Task { await libraryManager.logout() }
-                    } label: {
-                        Label("Terminar sessão", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                }
+                .listStyle(.insetGrouped)
+                .navigationTitle("Perfil")
+                .navigationBarTitleDisplayMode(.large)
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Perfil")
-            .navigationBarTitleDisplayMode(.large)
-        }
-        .navigationDestination(for: ProfileDestination.self) { destination in
-            switch destination {
-            case .reviews:
-                MyReviewsListView()
-            case .likes:
-                Text("Os meus gostos")
-            case .settings:
-                SettingsView()
-            case .aiModel:
-                Text("Gemma 4 (Ollama Local)")
-            case .dataManagement:
-                Text("Gestão de dados")
+            .navigationDestination(for: ProfileDestination.self) { destination in
+                switch destination {
+                case .reviews:
+                    MyReviewsListView()
+                case .likes:
+                    Text("Os meus gostos")
+                case .settings:
+                    SettingsView()
+                case .aiModel:
+                    Text("Gemma 4 (Ollama Local)")
+                case .dataManagement:
+                    Text("Gestão de dados")
+                }
             }
         }
     }
