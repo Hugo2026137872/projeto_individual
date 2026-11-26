@@ -805,7 +805,6 @@ class LibraryManager: ObservableObject {
         books.append(book)
         pendingBookMutations += 1
         Task {
-            defer { pendingBookMutations = max(0, pendingBookMutations - 1) }
             do {
                 try await repository.saveBook(book)
                 errorMessage = nil
@@ -814,6 +813,7 @@ class LibraryManager: ObservableObject {
             } catch {
                 errorMessage = "Erro ao guardar livro no servidor: \(error.localizedDescription)"
             }
+            pendingBookMutations = max(0, pendingBookMutations - 1)
         }
     }
     
@@ -822,7 +822,6 @@ class LibraryManager: ObservableObject {
             books[index].status = status
             pendingBookMutations += 1
             Task {
-                defer { pendingBookMutations = max(0, pendingBookMutations - 1) }
                 do {
                     try await repository.updateBookStatus(bookId: bookId, status: status)
                     errorMessage = nil
@@ -831,6 +830,7 @@ class LibraryManager: ObservableObject {
                 } catch {
                     errorMessage = "Erro ao atualizar estado no servidor: \(error.localizedDescription)"
                 }
+                pendingBookMutations = max(0, pendingBookMutations - 1)
             }
         }
     }
@@ -839,7 +839,6 @@ class LibraryManager: ObservableObject {
         books.removeAll { $0.id == bookId }
         pendingBookMutations += 1
         Task {
-            defer { pendingBookMutations = max(0, pendingBookMutations - 1) }
             do {
                 try await repository.deleteBook(bookId: bookId)
                 errorMessage = nil
@@ -848,6 +847,7 @@ class LibraryManager: ObservableObject {
             } catch {
                 errorMessage = "Erro ao remover livro do servidor: \(error.localizedDescription)"
             }
+            pendingBookMutations = max(0, pendingBookMutations - 1)
         }
     }
     
