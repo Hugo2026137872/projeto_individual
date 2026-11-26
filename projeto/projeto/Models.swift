@@ -18,12 +18,21 @@ struct Book: Identifiable, Codable, Hashable {
 }
 
 struct Review: Identifiable, Codable, Hashable {
-    var id = UUID()
+    var id: UUID
     let bookId: String
     let username: String
     let content: String
     let rating: Int
-    let date: Date = Date()
+    var date: Date
+    
+    init(id: UUID = UUID(), bookId: String, username: String, content: String, rating: Int, date: Date = Date()) {
+        self.id = id
+        self.bookId = bookId
+        self.username = username
+        self.content = content
+        self.rating = rating
+        self.date = date
+    }
 }
 
 struct AIRecommendationItem: Codable {

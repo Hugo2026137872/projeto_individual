@@ -421,8 +421,34 @@ struct BibliotecaView: View {
                     .padding(.horizontal)
                 }
                 
+                if let errorMessage = libraryManager.errorMessage {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Button("Tentar") {
+                            Task { await libraryManager.loadInitialData() }
+                        }
+                        .font(.caption.bold())
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.12))
+                    .cornerRadius(10)
+                    .padding(.horizontal)
+                }
+                
                 List {
-                    if livrosFiltrados.isEmpty {
+                    if libraryManager.isLoadingData && libraryManager.books.isEmpty {
+                        HStack {
+                            Spacer()
+                            ProgressView("A sincronizar biblioteca...")
+                            Spacer()
+                        }
+                        .listRowSeparator(.hidden)
+                    } else if livrosFiltrados.isEmpty {
                         Text(filtroSelecionado == "Todos" ? "A tua biblioteca está vazia. Adiciona livros!" : "Nenhum livro com este estado.")
                             .foregroundColor(.secondary)
                             .padding()
@@ -465,6 +491,9 @@ struct BibliotecaView: View {
                     }
                 }
                 .listStyle(.plain)
+                .refreshable {
+                    await libraryManager.loadInitialData()
+                }
             }
             .navigationTitle("Biblioteca")
             .navigationDestination(for: Book.self) { livro in
@@ -654,7 +683,7 @@ struct PerfilView: View {
                     NavigationLink(destination: Text("Os meus gostos")) {
                         Label("Os meus gostos", systemImage: "heart")
                     }
-                    NavigationLink(destination: Text("Definições")) {
+                    NavigationLink(destination: SettingsView()) {
                         Label("Definições", systemImage: "gearshape")
                     }
                 }
@@ -695,6 +724,70 @@ struct MyReviewsListView: View {
         }
         .listStyle(.plain)
         .navigationTitle("As minhas avaliações")
+    }
+}
+
+struct SettingsView: View {
+    @EnvironmentObject var libraryManager: LibraryManager
+    @State private var serverURL: String = ServerConfig.baseURL
+    @State private var connectionStatus: String? = nil
+    @State private var isTesting = false
+    
+    var body: some View {
+        Form {
+            Section(header: Text("Servidor Web (API)")) {
+                TextField("URL da API", text: $serverURL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                
+                Button("Usar IP Host (192.168.221.1:3000)") {
+                    serverURL = "http://192.168.221.1:3000/api"
+                }
+                
+                Button("Usar Localhost (localhost:3000)") {
+                    serverURL = "http://localhost:3000/api"
+                }
+            }
+            
+            Section {
+                Button {
+                    Task { await saveAndTest() }
+                } label: {
+                    HStack {
+                        Text("Guardar e Sincronizar")
+                        Spacer()
+                        if isTesting {
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(isTesting || serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                
+                if let connectionStatus {
+                    Text(connectionStatus)
+                        .font(.footnote)
+                        .foregroundColor(connectionStatus.contains("Ligado") ? .green : .red)
+                }
+            }
+        }
+        .navigationTitle("Definições")
+    }
+    
+    @MainActor
+    private func saveAndTest() async {
+        isTesting = true
+        ServerConfig.baseURL = serverURL
+        serverURL = ServerConfig.baseURL
+        
+        let healthy = await RemoteBookRepository().checkHealth()
+        if healthy {
+            await libraryManager.loadInitialData()
+            connectionStatus = "Ligado ao servidor e biblioteca sincronizada."
+        } else {
+            connectionStatus = "Não foi possível ligar a \(ServerConfig.baseURL)."
+        }
+        isTesting = false
     }
 }
 

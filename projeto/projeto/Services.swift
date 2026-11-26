@@ -148,7 +148,41 @@ class GemmaRecommendationService {
     }
 }
 
-// MARK: - Repository Pattern (Local Persistence + Future Web Server Ready)
+// MARK: - Server Configuration
+enum ServerConfig {
+    static let defaultBaseURL = "http://192.168.221.1:3000/api"
+    private static let baseURLKey = "booknest_server_base_url"
+    
+    static var baseURL: String {
+        get {
+            let saved = UserDefaults.standard.string(forKey: baseURLKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return saved.isEmpty ? defaultBaseURL : saved.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        set {
+            let cleaned = newValue
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            UserDefaults.standard.set(cleaned, forKey: baseURLKey)
+        }
+    }
+}
+
+enum RepositoryError: LocalizedError {
+    case invalidURL
+    case serverError(statusCode: Int)
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "URL do servidor inválido."
+        case .serverError(let statusCode):
+            return "O servidor respondeu com erro (HTTP \(statusCode))."
+        }
+    }
+}
+
+// MARK: - Repository Pattern (Local Persistence + Web Server)
 protocol BookRepository {
     func fetchBooks() async throws -> [Book]
     func saveBook(_ book: Book) async throws
@@ -211,52 +245,103 @@ class LocalBookRepository: BookRepository {
 }
 
 class RemoteBookRepository: BookRepository {
-    private let baseURL = "https://your-server.com/api"
+    private var baseURLString: String {
+        ServerConfig.baseURL
+    }
+    
+    private func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
+    
+    private func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+    
+    private func makeURL(pathComponents: [String] = []) throws -> URL {
+        guard var url = URL(string: baseURLString) else {
+            throw RepositoryError.invalidURL
+        }
+        for component in pathComponents {
+            url.appendPathComponent(component)
+        }
+        return url
+    }
+    
+    private func makeRequest(url: URL, method: String, body: Data? = nil) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+        return request
+    }
+    
+    private func validateResponse(_ response: URLResponse) throws {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw RepositoryError.serverError(statusCode: httpResponse.statusCode)
+        }
+    }
+    
+    func checkHealth() async -> Bool {
+        guard let url = try? makeURL(pathComponents: ["health"]) else { return false }
+        let request = makeRequest(url: url, method: "GET")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            try validateResponse(response)
+            return true
+        } catch {
+            return false
+        }
+    }
     
     func fetchBooks() async throws -> [Book] {
-        guard let url = URL(string: "\(baseURL)/books") else { throw URLError(.badURL) }
-        let (data, _) = try await URLSession.shared.data(from: url)
-        return try JSONDecoder().decode([Book].self, from: data)
+        let url = try makeURL(pathComponents: ["books"])
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
+        try validateResponse(response)
+        return try makeDecoder().decode([Book].self, from: data)
     }
     
     func saveBook(_ book: Book) async throws {
-        guard let url = URL(string: "\(baseURL)/books") else { throw URLError(.badURL) }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(book)
-        _ = try await URLSession.shared.data(for: request)
+        let url = try makeURL(pathComponents: ["books"])
+        let body = try makeEncoder().encode(book)
+        let (_, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "POST", body: body))
+        try validateResponse(response)
     }
     
     func updateBookStatus(bookId: String, status: ReadingStatus) async throws {
-        guard let url = URL(string: "\(baseURL)/books/\(bookId)") else { throw URLError(.badURL) }
-        var request = URLRequest(url: url)
-        request.httpMethod = "PATCH"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["status": status.rawValue])
-        _ = try await URLSession.shared.data(for: request)
+        let url = try makeURL(pathComponents: ["books", bookId])
+        let body = try makeEncoder().encode(["status": status.rawValue])
+        let (_, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "PATCH", body: body))
+        try validateResponse(response)
     }
     
     func deleteBook(bookId: String) async throws {
-        guard let url = URL(string: "\(baseURL)/books/\(bookId)") else { throw URLError(.badURL) }
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        _ = try await URLSession.shared.data(for: request)
+        let url = try makeURL(pathComponents: ["books", bookId])
+        let (_, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "DELETE"))
+        try validateResponse(response)
     }
     
     func fetchReviews() async throws -> [Review] {
-        guard let url = URL(string: "\(baseURL)/reviews") else { throw URLError(.badURL) }
-        let (data, _) = try await URLSession.shared.data(from: url)
-        return try JSONDecoder().decode([Review].self, from: data)
+        let url = try makeURL(pathComponents: ["reviews"])
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
+        try validateResponse(response)
+        return try makeDecoder().decode([Review].self, from: data)
     }
     
     func saveReview(_ review: Review) async throws {
-        guard let url = URL(string: "\(baseURL)/reviews") else { throw URLError(.badURL) }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(review)
-        _ = try await URLSession.shared.data(for: request)
+        let url = try makeURL(pathComponents: ["reviews"])
+        let body = try makeEncoder().encode(review)
+        let (_, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "POST", body: body))
+        try validateResponse(response)
     }
 }
 
@@ -266,6 +351,7 @@ class LibraryManager: ObservableObject {
     @Published var books: [Book] = []
     @Published var reviews: [Review] = []
     @Published var isLoadingData: Bool = false
+    @Published var errorMessage: String? = nil
     
     @Published var searchPath = NavigationPath()
     @Published var recommendationsPath = NavigationPath()
@@ -282,19 +368,21 @@ class LibraryManager: ObservableObject {
     
     private let repository: BookRepository
     
-    init(repository: BookRepository = LocalBookRepository()) {
+    init(repository: BookRepository = RemoteBookRepository()) {
         self.repository = repository
         Task { await loadInitialData() }
     }
     
     func loadInitialData() async {
         isLoadingData = true
+        errorMessage = nil
         do {
             async let fetchedBooks = repository.fetchBooks()
             async let fetchedReviews = repository.fetchReviews()
             self.books = try await fetchedBooks
             self.reviews = try await fetchedReviews
         } catch {
+            self.errorMessage = "Erro ao ligar ao servidor: \(error.localizedDescription)"
             print("Erro ao carregar dados: \(error.localizedDescription)")
         }
         isLoadingData = false
@@ -310,19 +398,40 @@ class LibraryManager: ObservableObject {
     func addBook(_ book: Book) {
         guard !books.contains(where: { $0.id == book.id }) else { return }
         books.append(book)
-        Task { try? await repository.saveBook(book) }
+        Task {
+            do {
+                try await repository.saveBook(book)
+                errorMessage = nil
+            } catch {
+                errorMessage = "Erro ao guardar livro no servidor: \(error.localizedDescription)"
+            }
+        }
     }
     
     func updateStatus(for bookId: String, status: ReadingStatus) {
         if let index = books.firstIndex(where: { $0.id == bookId }) {
             books[index].status = status
-            Task { try? await repository.updateBookStatus(bookId: bookId, status: status) }
+            Task {
+                do {
+                    try await repository.updateBookStatus(bookId: bookId, status: status)
+                    errorMessage = nil
+                } catch {
+                    errorMessage = "Erro ao atualizar estado no servidor: \(error.localizedDescription)"
+                }
+            }
         }
     }
     
     func removeBook(bookId: String) {
         books.removeAll { $0.id == bookId }
-        Task { try? await repository.deleteBook(bookId: bookId) }
+        Task {
+            do {
+                try await repository.deleteBook(bookId: bookId)
+                errorMessage = nil
+            } catch {
+                errorMessage = "Erro ao remover livro do servidor: \(error.localizedDescription)"
+            }
+        }
     }
     
     func addReview(bookId: String, username: String = "Hugo Marques", content: String, rating: Int) {
@@ -333,7 +442,14 @@ class LibraryManager: ObservableObject {
             books[index].userRating = rating
         }
         
-        Task { try? await repository.saveReview(newReview) }
+        Task {
+            do {
+                try await repository.saveReview(newReview)
+                errorMessage = nil
+            } catch {
+                errorMessage = "Erro ao guardar crítica no servidor: \(error.localizedDescription)"
+            }
+        }
     }
     
     func reviewsFor(bookId: String) -> [Review] {
