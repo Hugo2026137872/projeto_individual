@@ -285,6 +285,7 @@ struct InicioView: View {
                 }
             }
         }
+        .id(libraryManager.navigationResetID)
     }
 }
 
@@ -395,6 +396,7 @@ struct PesquisarView: View {
                 BookDetailView(book: livro)
             }
         }
+        .id(libraryManager.navigationResetID)
     }
     
     @MainActor
@@ -524,6 +526,7 @@ struct RecomendacoesView: View {
                 }
             }
         }
+        .id(libraryManager.navigationResetID)
     }
     
     @MainActor
@@ -664,6 +667,7 @@ struct BibliotecaView: View {
                 await libraryManager.refreshBooks()
             }
         }
+        .id(libraryManager.navigationResetID)
     }
 }
 
@@ -867,6 +871,7 @@ struct PerfilView: View {
             .navigationTitle("Perfil")
             .navigationBarTitleDisplayMode(.large)
         }
+        .id(libraryManager.navigationResetID)
     }
 }
 

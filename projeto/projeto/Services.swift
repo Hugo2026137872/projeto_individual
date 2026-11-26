@@ -612,6 +612,7 @@ class LibraryManager: ObservableObject {
     @Published var recommendationsPath = NavigationPath()
     @Published var libraryPath = NavigationPath()
     @Published var profilePath = NavigationPath()
+    @Published private(set) var navigationResetID = UUID()
     
     @Published var selectedTab: Int = 0 {
         didSet {
@@ -798,6 +799,7 @@ class LibraryManager: ObservableObject {
         recommendationsPath = NavigationPath()
         libraryPath = NavigationPath()
         profilePath = NavigationPath()
+        navigationResetID = UUID()
     }
     
     func addBook(_ book: Book) {
