@@ -1,6 +1,6 @@
 # BookNest Web Server
 
-Lightweight Node.js REST API server for the BookNest iOS app (`projeto/`). Uses only built-in Node.js modules (no `npm install` needed) and persists data to `data/db.json`.
+Lightweight Node.js REST API server for the BookNest iOS app (`projeto/`). Uses only built-in Node.js modules (no `npm install` needed) and persists users, sessions, books, and reviews to `data/db.json`.
 
 ## Requirements
 
@@ -38,15 +38,22 @@ npm test
 
 ## API Endpoints
 
-- `GET /api/health` — Server status and item counts
-- `GET /api/books` — List all saved books
-- `GET /api/books/:bookId` — Fetch a single saved book by ID
-- `POST /api/books` — Add a book (`Book` JSON)
+### Auth
+- `POST /api/auth/register` — Register user (`{ name, email, password }`) and return `{ token, user }`
+- `POST /api/auth/login` — Login (`{ email, password }`) and return `{ token, user }`
+- `POST /api/auth/logout` — Revoke current Bearer token
+- `GET /api/auth/me` — Fetch the authenticated user (`Authorization: Bearer <token>`)
+
+### Library & Reviews (require `Authorization: Bearer <token>`)
+- `GET /api/health` — Server status and item counts (public)
+- `GET /api/books` — List authenticated user's saved books
+- `GET /api/books/:bookId` — Fetch a single saved book from the user's library
+- `POST /api/books` — Add a book (`Book` JSON) to the user's library
 - `PATCH /api/books/:bookId` — Update `status` and/or `userRating`
-- `DELETE /api/books/:bookId` — Remove a book
-- `GET /api/reviews` — List reviews (optional `?bookId=...` and/or `?username=...` filters)
-- `POST /api/reviews` — Create a review (`Review` JSON) and update the book's `userRating`
+- `DELETE /api/books/:bookId` — Remove a book from the user's library
+- `GET /api/reviews` — List reviews (optional `?bookId=...`, `?username=...`, or `?mine=true`)
+- `POST /api/reviews` — Create a review as the authenticated user and update the book's `userRating`
 
 ## iOS App Note (HTTP / App Transport Security)
 
-The Swift app defaults to `http://192.168.221.1:3000/api` (editable in **Perfil → Definições**). Because local development uses `http://`, make sure **Allow Arbitrary Loads** (`NSAllowsArbitraryLoads = YES`) or **Allow Arbitrary Loads in Local Networking** is enabled under your Xcode target's **Info** tab if iOS blocks plain HTTP requests.
+The Swift app defaults to `http://192.168.221.1:3000/api` (editable on the Login screen or under **Perfil → Definições**). Because local development uses `http://`, make sure **Allow Arbitrary Loads** (`NSAllowsArbitraryLoads = YES`) or **Allow Arbitrary Loads in Local Networking** is enabled under your Xcode target's **Info** tab if iOS blocks plain HTTP requests.

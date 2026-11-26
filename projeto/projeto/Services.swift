@@ -168,17 +168,149 @@ enum ServerConfig {
     }
 }
 
+// MARK: - Auth Session Storage
+enum AuthSession {
+    private static let tokenKey = "booknest_auth_token"
+    private static let userKey = "booknest_auth_user"
+    
+    static var token: String? {
+        get { UserDefaults.standard.string(forKey: tokenKey) }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(newValue, forKey: tokenKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: tokenKey)
+            }
+        }
+    }
+    
+    static var user: User? {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: userKey) else { return nil }
+            return try? JSONDecoder().decode(User.self, from: data)
+        }
+        set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: userKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: userKey)
+            }
+        }
+    }
+    
+    static func clear() {
+        token = nil
+        user = nil
+    }
+}
+
 enum RepositoryError: LocalizedError {
     case invalidURL
-    case serverError(statusCode: Int)
+    case unauthorized
+    case serverError(statusCode: Int, message: String? = nil)
     
     var errorDescription: String? {
         switch self {
         case .invalidURL:
             return "URL do servidor inválido."
-        case .serverError(let statusCode):
+        case .unauthorized:
+            return "Sessão inválida ou expirada. Inicia sessão novamente."
+        case .serverError(let statusCode, let message):
+            if let message, !message.isEmpty {
+                return message
+            }
             return "O servidor respondeu com erro (HTTP \(statusCode))."
         }
+    }
+}
+
+private func parseServerErrorMessage(from data: Data) -> String? {
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let message = json["error"] as? String else {
+        return nil
+    }
+    return message
+}
+
+// MARK: - Auth Service
+class AuthService {
+    private var baseURLString: String {
+        ServerConfig.baseURL
+    }
+    
+    private func makeURL(pathComponents: [String]) throws -> URL {
+        guard var url = URL(string: baseURLString) else {
+            throw RepositoryError.invalidURL
+        }
+        for component in pathComponents {
+            url.appendPathComponent(component)
+        }
+        return url
+    }
+    
+    private func sendJSONRequest<Body: Encodable>(pathComponents: [String], body: Body) async throws -> (Data, HTTPURLResponse) {
+        let url = try makeURL(pathComponents: pathComponents)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        return (data, httpResponse)
+    }
+    
+    func register(name: String, email: String, password: String) async throws -> AuthResponse {
+        let payload = ["name": name, "email": email, "password": password]
+        let (data, response) = try await sendJSONRequest(pathComponents: ["auth", "register"], body: payload)
+        guard (200..<300).contains(response.statusCode) else {
+            throw RepositoryError.serverError(statusCode: response.statusCode, message: parseServerErrorMessage(from: data))
+        }
+        return try JSONDecoder().decode(AuthResponse.self, from: data)
+    }
+    
+    func login(email: String, password: String) async throws -> AuthResponse {
+        let payload = ["email": email, "password": password]
+        let (data, response) = try await sendJSONRequest(pathComponents: ["auth", "login"], body: payload)
+        guard (200..<300).contains(response.statusCode) else {
+            if response.statusCode == 401 {
+                throw RepositoryError.serverError(statusCode: 401, message: parseServerErrorMessage(from: data) ?? "Email ou palavra-passe inválidos.")
+            }
+            throw RepositoryError.serverError(statusCode: response.statusCode, message: parseServerErrorMessage(from: data))
+        }
+        return try JSONDecoder().decode(AuthResponse.self, from: data)
+    }
+    
+    func fetchCurrentUser(token: String) async throws -> User {
+        let url = try makeURL(pathComponents: ["auth", "me"])
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        if httpResponse.statusCode == 401 {
+            throw RepositoryError.unauthorized
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw RepositoryError.serverError(statusCode: httpResponse.statusCode, message: parseServerErrorMessage(from: data))
+        }
+        return try JSONDecoder().decode(User.self, from: data)
+    }
+    
+    func logout(token: String) async {
+        guard let url = try? makeURL(pathComponents: ["auth", "logout"]) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        _ = try? await URLSession.shared.data(for: request)
     }
 }
 
@@ -192,7 +324,7 @@ protocol BookRepository {
     
     func fetchReviews() async throws -> [Review]
     func fetchReviews(bookId: String) async throws -> [Review]
-    func fetchReviews(username: String) async throws -> [Review]
+    func fetchUserReviews() async throws -> [Review]
     func saveReview(_ review: Review) async throws
 }
 
@@ -248,9 +380,12 @@ class LocalBookRepository: BookRepository {
         return reviews.filter { $0.bookId == bookId }
     }
     
-    func fetchReviews(username: String) async throws -> [Review] {
+    func fetchUserReviews() async throws -> [Review] {
         let reviews = try await fetchReviews()
-        return reviews.filter { $0.username.caseInsensitiveCompare(username) == .orderedSame }
+        if let currentName = AuthSession.user?.name {
+            return reviews.filter { $0.username.caseInsensitiveCompare(currentName) == .orderedSame }
+        }
+        return reviews
     }
     
     func saveReview(_ review: Review) async throws {
@@ -303,6 +438,9 @@ class RemoteBookRepository: BookRepository {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 15
+        if let token = AuthSession.token {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
@@ -310,12 +448,18 @@ class RemoteBookRepository: BookRepository {
         return request
     }
     
-    private func validateResponse(_ response: URLResponse) throws {
+    private func validateResponse(_ response: URLResponse, data: Data) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
+        if httpResponse.statusCode == 401 {
+            throw RepositoryError.unauthorized
+        }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw RepositoryError.serverError(statusCode: httpResponse.statusCode)
+            throw RepositoryError.serverError(
+                statusCode: httpResponse.statusCode,
+                message: parseServerErrorMessage(from: data)
+            )
         }
     }
     
@@ -323,8 +467,8 @@ class RemoteBookRepository: BookRepository {
         guard let url = try? makeURL(pathComponents: ["health"]) else { return false }
         let request = makeRequest(url: url, method: "GET")
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            try validateResponse(response)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try validateResponse(response, data: data)
             return true
         } catch {
             return false
@@ -334,7 +478,7 @@ class RemoteBookRepository: BookRepository {
     func fetchBooks() async throws -> [Book] {
         let url = try makeURL(pathComponents: ["books"])
         let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
-        try validateResponse(response)
+        try validateResponse(response, data: data)
         return try makeDecoder().decode([Book].self, from: data)
     }
     
@@ -344,34 +488,34 @@ class RemoteBookRepository: BookRepository {
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
             return nil
         }
-        try validateResponse(response)
+        try validateResponse(response, data: data)
         return try makeDecoder().decode(Book.self, from: data)
     }
     
     func saveBook(_ book: Book) async throws {
         let url = try makeURL(pathComponents: ["books"])
         let body = try makeEncoder().encode(book)
-        let (_, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "POST", body: body))
-        try validateResponse(response)
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "POST", body: body))
+        try validateResponse(response, data: data)
     }
     
     func updateBookStatus(bookId: String, status: ReadingStatus) async throws {
         let url = try makeURL(pathComponents: ["books", bookId])
         let body = try makeEncoder().encode(["status": status.rawValue])
-        let (_, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "PATCH", body: body))
-        try validateResponse(response)
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "PATCH", body: body))
+        try validateResponse(response, data: data)
     }
     
     func deleteBook(bookId: String) async throws {
         let url = try makeURL(pathComponents: ["books", bookId])
-        let (_, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "DELETE"))
-        try validateResponse(response)
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "DELETE"))
+        try validateResponse(response, data: data)
     }
     
     func fetchReviews() async throws -> [Review] {
         let url = try makeURL(pathComponents: ["reviews"])
         let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
-        try validateResponse(response)
+        try validateResponse(response, data: data)
         return try makeDecoder().decode([Review].self, from: data)
     }
     
@@ -381,38 +525,46 @@ class RemoteBookRepository: BookRepository {
             queryItems: [URLQueryItem(name: "bookId", value: bookId)]
         )
         let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
-        try validateResponse(response)
+        try validateResponse(response, data: data)
         return try makeDecoder().decode([Review].self, from: data)
     }
     
-    func fetchReviews(username: String) async throws -> [Review] {
+    func fetchUserReviews() async throws -> [Review] {
         let url = try makeURL(
             pathComponents: ["reviews"],
-            queryItems: [URLQueryItem(name: "username", value: username)]
+            queryItems: [URLQueryItem(name: "mine", value: "true")]
         )
         let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
-        try validateResponse(response)
+        try validateResponse(response, data: data)
         return try makeDecoder().decode([Review].self, from: data)
     }
     
     func saveReview(_ review: Review) async throws {
         let url = try makeURL(pathComponents: ["reviews"])
         let body = try makeEncoder().encode(review)
-        let (_, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "POST", body: body))
-        try validateResponse(response)
+        let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "POST", body: body))
+        try validateResponse(response, data: data)
     }
 }
 
 // MARK: - User Library Manager
 @MainActor
 class LibraryManager: ObservableObject {
+    @Published var currentUser: User? = nil
     @Published var books: [Book] = []
     @Published var reviews: [Review] = []
     @Published var userReviews: [Review] = []
     @Published var isLoadingData: Bool = false
     @Published var errorMessage: String? = nil
     
-    let currentUsername = "Hugo Marques"
+    var isAuthenticated: Bool {
+        currentUser != nil && AuthSession.token != nil
+    }
+    
+    var firstName: String {
+        let name = currentUser?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.split(separator: " ").first.map(String.init) ?? "Leitor"
+    }
     
     @Published var searchPath = NavigationPath()
     @Published var recommendationsPath = NavigationPath()
@@ -428,22 +580,82 @@ class LibraryManager: ObservableObject {
     }
     
     private let repository: BookRepository
+    private let authService: AuthService
     
-    init(repository: BookRepository = RemoteBookRepository()) {
+    init(repository: BookRepository = RemoteBookRepository(), authService: AuthService = AuthService()) {
         self.repository = repository
-        Task { await loadInitialData() }
+        self.authService = authService
+        
+        if let savedUser = AuthSession.user, AuthSession.token != nil {
+            self.currentUser = savedUser
+            Task { await restoreSession() }
+        }
+    }
+    
+    func restoreSession() async {
+        guard let token = AuthSession.token else { return }
+        do {
+            let freshUser = try await authService.fetchCurrentUser(token: token)
+            self.currentUser = freshUser
+            AuthSession.user = freshUser
+            await loadInitialData()
+        } catch RepositoryError.unauthorized {
+            clearLocalSession()
+        } catch {
+            // Keep cached user if server is temporarily unreachable and surface error
+            await loadInitialData()
+        }
+    }
+    
+    func register(name: String, email: String, password: String) async throws {
+        let response = try await authService.register(name: name, email: email, password: password)
+        AuthSession.token = response.token
+        AuthSession.user = response.user
+        self.currentUser = response.user
+        self.selectedTab = 0
+        await loadInitialData()
+    }
+    
+    func login(email: String, password: String) async throws {
+        let response = try await authService.login(email: email, password: password)
+        AuthSession.token = response.token
+        AuthSession.user = response.user
+        self.currentUser = response.user
+        self.selectedTab = 0
+        await loadInitialData()
+    }
+    
+    func logout() async {
+        if let token = AuthSession.token {
+            await authService.logout(token: token)
+        }
+        clearLocalSession()
+    }
+    
+    private func clearLocalSession() {
+        AuthSession.clear()
+        self.currentUser = nil
+        self.books = []
+        self.reviews = []
+        self.userReviews = []
+        self.errorMessage = nil
+        self.selectedTab = 0
+        resetAllNavigation()
     }
     
     func loadInitialData() async {
+        guard isAuthenticated else { return }
         isLoadingData = true
         errorMessage = nil
         do {
             async let fetchedBooks = repository.fetchBooks()
             async let fetchedReviews = repository.fetchReviews()
-            async let fetchedUserReviews = repository.fetchReviews(username: currentUsername)
+            async let fetchedUserReviews = repository.fetchUserReviews()
             self.books = try await fetchedBooks
             self.reviews = try await fetchedReviews
             self.userReviews = try await fetchedUserReviews
+        } catch RepositoryError.unauthorized {
+            clearLocalSession()
         } catch {
             self.errorMessage = "Erro ao ligar ao servidor: \(error.localizedDescription)"
             print("Erro ao carregar dados: \(error.localizedDescription)")
@@ -452,10 +664,13 @@ class LibraryManager: ObservableObject {
     }
     
     func refreshBooks() async {
+        guard isAuthenticated else { return }
         isLoadingData = true
         do {
             self.books = try await repository.fetchBooks()
             errorMessage = nil
+        } catch RepositoryError.unauthorized {
+            clearLocalSession()
         } catch {
             self.errorMessage = "Erro ao carregar biblioteca: \(error.localizedDescription)"
         }
@@ -463,6 +678,7 @@ class LibraryManager: ObservableObject {
     }
     
     func refreshBookDetails(bookId: String) async {
+        guard isAuthenticated else { return }
         do {
             async let fetchedBook = repository.fetchBook(bookId: bookId)
             async let fetchedReviews = repository.fetchReviews(bookId: bookId)
@@ -479,27 +695,35 @@ class LibraryManager: ObservableObject {
             reviews.removeAll { $0.bookId == bookId }
             reviews.insert(contentsOf: bookReviews, at: 0)
             errorMessage = nil
+        } catch RepositoryError.unauthorized {
+            clearLocalSession()
         } catch {
             self.errorMessage = "Erro ao carregar detalhes do livro: \(error.localizedDescription)"
         }
     }
     
     func refreshReviewsForBook(bookId: String) async {
+        guard isAuthenticated else { return }
         do {
             let bookReviews = try await repository.fetchReviews(bookId: bookId)
             reviews.removeAll { $0.bookId == bookId }
             reviews.insert(contentsOf: bookReviews, at: 0)
             errorMessage = nil
+        } catch RepositoryError.unauthorized {
+            clearLocalSession()
         } catch {
             self.errorMessage = "Erro ao carregar críticas: \(error.localizedDescription)"
         }
     }
     
     func refreshUserReviews() async {
+        guard isAuthenticated else { return }
         isLoadingData = true
         do {
-            self.userReviews = try await repository.fetchReviews(username: currentUsername)
+            self.userReviews = try await repository.fetchUserReviews()
             errorMessage = nil
+        } catch RepositoryError.unauthorized {
+            clearLocalSession()
         } catch {
             self.errorMessage = "Erro ao carregar as tuas avaliações: \(error.localizedDescription)"
         }
@@ -520,6 +744,8 @@ class LibraryManager: ObservableObject {
             do {
                 try await repository.saveBook(book)
                 errorMessage = nil
+            } catch RepositoryError.unauthorized {
+                clearLocalSession()
             } catch {
                 errorMessage = "Erro ao guardar livro no servidor: \(error.localizedDescription)"
             }
@@ -533,6 +759,8 @@ class LibraryManager: ObservableObject {
                 do {
                     try await repository.updateBookStatus(bookId: bookId, status: status)
                     errorMessage = nil
+                } catch RepositoryError.unauthorized {
+                    clearLocalSession()
                 } catch {
                     errorMessage = "Erro ao atualizar estado no servidor: \(error.localizedDescription)"
                 }
@@ -546,19 +774,19 @@ class LibraryManager: ObservableObject {
             do {
                 try await repository.deleteBook(bookId: bookId)
                 errorMessage = nil
+            } catch RepositoryError.unauthorized {
+                clearLocalSession()
             } catch {
                 errorMessage = "Erro ao remover livro do servidor: \(error.localizedDescription)"
             }
         }
     }
     
-    func addReview(bookId: String, username: String? = nil, content: String, rating: Int) {
-        let authorName = username ?? currentUsername
+    func addReview(bookId: String, content: String, rating: Int) {
+        let authorName = currentUser?.name ?? "Utilizador"
         let newReview = Review(bookId: bookId, username: authorName, content: content, rating: rating)
         reviews.insert(newReview, at: 0)
-        if authorName.caseInsensitiveCompare(currentUsername) == .orderedSame {
-            userReviews.insert(newReview, at: 0)
-        }
+        userReviews.insert(newReview, at: 0)
         
         if let index = books.firstIndex(where: { $0.id == bookId }) {
             books[index].userRating = rating
@@ -568,6 +796,8 @@ class LibraryManager: ObservableObject {
             do {
                 try await repository.saveReview(newReview)
                 errorMessage = nil
+            } catch RepositoryError.unauthorized {
+                clearLocalSession()
             } catch {
                 errorMessage = "Erro ao guardar crítica no servidor: \(error.localizedDescription)"
             }

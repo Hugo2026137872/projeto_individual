@@ -1,32 +1,181 @@
 import SwiftUI
 
-// MARK: - Navegação Principal (TabView)
+// MARK: - Navegação Principal (Auth + TabView)
 struct ContentView: View {
     @EnvironmentObject var libraryManager: LibraryManager
     
     var body: some View {
-        TabView(selection: $libraryManager.selectedTab) {
-            InicioView()
-                .tabItem { Label("Início", systemImage: "house") }
-                .tag(0)
-            
-            PesquisarView()
-                .tabItem { Label("Pesquisar", systemImage: "magnifyingglass") }
-                .tag(1)
-            
-            RecomendacoesView()
-                .tabItem { Label("Recomendações", systemImage: "sparkles") }
-                .tag(2)
-            
-            BibliotecaView()
-                .tabItem { Label("Biblioteca", systemImage: "book.closed") }
-                .tag(3)
-            
-            PerfilView()
-                .tabItem { Label("Perfil", systemImage: "person") }
-                .tag(4)
+        Group {
+            if libraryManager.isAuthenticated {
+                TabView(selection: $libraryManager.selectedTab) {
+                    InicioView()
+                        .tabItem { Label("Início", systemImage: "house") }
+                        .tag(0)
+                    
+                    PesquisarView()
+                        .tabItem { Label("Pesquisar", systemImage: "magnifyingglass") }
+                        .tag(1)
+                    
+                    RecomendacoesView()
+                        .tabItem { Label("Recomendações", systemImage: "sparkles") }
+                        .tag(2)
+                    
+                    BibliotecaView()
+                        .tabItem { Label("Biblioteca", systemImage: "book.closed") }
+                        .tag(3)
+                    
+                    PerfilView()
+                        .tabItem { Label("Perfil", systemImage: "person") }
+                        .tag(4)
+                }
+                .tint(.green)
+            } else {
+                AuthView()
+            }
         }
-        .tint(.green)
+    }
+}
+
+// MARK: - Autenticação (Login e Registo)
+struct AuthView: View {
+    @EnvironmentObject var libraryManager: LibraryManager
+    @State private var isRegisterMode = false
+    @State private var name = ""
+    @State private var email = ""
+    @State private var password = ""
+    @State private var isSubmitting = false
+    @State private var errorMessage: String? = nil
+    @State private var showingServerSettings = false
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    VStack(spacing: 8) {
+                        Image(systemName: "books.vertical.fill")
+                            .font(.system(size: 56))
+                            .foregroundColor(.green)
+                        Text("BookNest")
+                            .font(.largeTitle)
+                            .bold()
+                        Text(isRegisterMode ? "Cria a tua conta para começar." : "Inicia sessão na tua biblioteca.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 24)
+                    
+                    Picker("Modo", selection: $isRegisterMode) {
+                        Text("Entrar").tag(false)
+                        Text("Criar Conta").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: isRegisterMode) { _ in
+                        errorMessage = nil
+                    }
+                    
+                    VStack(spacing: 14) {
+                        if isRegisterMode {
+                            TextField("Nome completo", text: $name)
+                                .textContentType(.name)
+                                .padding()
+                                .background(Color(UIColor.secondarySystemBackground))
+                                .cornerRadius(12)
+                        }
+                        
+                        TextField("Email", text: $email)
+                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textContentType(.emailAddress)
+                            .padding()
+                            .background(Color(UIColor.secondarySystemBackground))
+                            .cornerRadius(12)
+                        
+                        SecureField("Palavra-passe", text: $password)
+                            .textContentType(isRegisterMode ? .newPassword : .password)
+                            .padding()
+                            .background(Color(UIColor.secondarySystemBackground))
+                            .cornerRadius(12)
+                    }
+                    
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundColor(.red)
+                            .multilineTextAlignment(.center)
+                    }
+                    
+                    Button {
+                        Task { await submit() }
+                    } label: {
+                        HStack {
+                            if isSubmitting {
+                                ProgressView()
+                                    .tint(.white)
+                            } else {
+                                Text(isRegisterMode ? "Criar Conta" : "Entrar")
+                                    .font(.headline)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .disabled(isSubmitting || !canSubmit)
+                    
+                    Button {
+                        showingServerSettings = true
+                    } label: {
+                        Label("Configurar Servidor (\(ServerConfig.baseURL))", systemImage: "gearshape")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 8)
+                }
+                .padding()
+            }
+            .navigationBarTitleDisplayMode(.hidden)
+            .sheet(isPresented: $showingServerSettings) {
+                NavigationStack {
+                    SettingsView()
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Fechar") {
+                                    showingServerSettings = false
+                                }
+                            }
+                        }
+                }
+            }
+        }
+    }
+    
+    private var canSubmit: Bool {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isRegisterMode {
+            return !trimmedName.isEmpty && !trimmedEmail.isEmpty && !password.isEmpty
+        }
+        return !trimmedEmail.isEmpty && !password.isEmpty
+    }
+    
+    @MainActor
+    private func submit() async {
+        isSubmitting = true
+        errorMessage = nil
+        do {
+            let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            if isRegisterMode {
+                let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                try await libraryManager.register(name: trimmedName, email: trimmedEmail, password: password)
+            } else {
+                try await libraryManager.login(email: trimmedEmail, password: password)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSubmitting = false
     }
 }
 
@@ -39,7 +188,7 @@ struct InicioView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Olá, Hugo!")
+                        Text("Olá, \(libraryManager.firstName)!")
                             .font(.largeTitle)
                             .bold()
                         Text("Descobre o teu próximo livro.")
@@ -666,10 +815,10 @@ struct PerfilView: View {
                         .foregroundColor(.gray.opacity(0.5))
                     
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Hugo Marques")
+                        Text(libraryManager.currentUser?.name ?? "Utilizador")
                             .font(.title2)
                             .bold()
-                        Text("hugo@email.com")
+                        Text(libraryManager.currentUser?.email ?? "")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -703,6 +852,14 @@ struct PerfilView: View {
                 Section(header: Text("Privacidade")) {
                     NavigationLink(destination: Text("Gestão de dados")) {
                         Label("Gestão de dados", systemImage: "lock.shield")
+                    }
+                }
+                
+                Section {
+                    Button(role: .destructive) {
+                        Task { await libraryManager.logout() }
+                    } label: {
+                        Label("Terminar sessão", systemImage: "rectangle.portrait.and.arrow.right")
                     }
                 }
             }
@@ -801,8 +958,12 @@ struct SettingsView: View {
         
         let healthy = await RemoteBookRepository().checkHealth()
         if healthy {
-            await libraryManager.loadInitialData()
-            connectionStatus = "Ligado ao servidor e biblioteca sincronizada."
+            if libraryManager.isAuthenticated {
+                await libraryManager.loadInitialData()
+                connectionStatus = "Ligado ao servidor e biblioteca sincronizada."
+            } else {
+                connectionStatus = "Ligado ao servidor com sucesso."
+            }
         } else {
             connectionStatus = "Não foi possível ligar a \(ServerConfig.baseURL)."
         }

@@ -1,5 +1,16 @@
 import Foundation
 
+struct User: Identifiable, Codable, Equatable {
+    let id: String
+    let name: String
+    let email: String
+}
+
+struct AuthResponse: Codable {
+    let token: String
+    let user: User
+}
+
 enum ReadingStatus: String, CaseIterable, Codable {
     case interested = "Com interesse"
     case reading = "A ler"

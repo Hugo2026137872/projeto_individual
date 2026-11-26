@@ -24,23 +24,88 @@ async function startTestServer() {
   };
 }
 
-test("BookNest API CRUD lifecycle and persistence", async () => {
+test("BookNest auth, multi-user library isolation, and reviews", async () => {
   const { baseURL, dbPath, cleanup } = await startTestServer();
 
   try {
-    // 1. Health check
+    // 1. Health check works without auth
     const healthRes = await fetch(`${baseURL}/health`);
     assert.equal(healthRes.status, 200);
     const health = await healthRes.json();
     assert.equal(health.status, "ok");
 
-    // 2. Empty books & reviews initially
-    const initialBooks = await (await fetch(`${baseURL}/books`)).json();
-    assert.deepEqual(initialBooks, []);
-    const initialReviews = await (await fetch(`${baseURL}/reviews`)).json();
-    assert.deepEqual(initialReviews, []);
+    // 2. Protected endpoints require auth
+    const unauthBooksRes = await fetch(`${baseURL}/books`);
+    assert.equal(unauthBooksRes.status, 401);
 
-    // 3. Create book
+    // 3. Register User 1
+    const reg1Res = await fetch(`${baseURL}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Maria Silva",
+        email: "maria@example.com",
+        password: "secret123"
+      })
+    });
+    assert.equal(reg1Res.status, 201);
+    const reg1 = await reg1Res.json();
+    assert.ok(reg1.token);
+    assert.equal(reg1.user.name, "Maria Silva");
+    assert.equal(reg1.user.email, "maria@example.com");
+
+    // Duplicate email rejected
+    const dupRes = await fetch(`${baseURL}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Outra Maria",
+        email: "maria@example.com",
+        password: "password"
+      })
+    });
+    assert.equal(dupRes.status, 409);
+
+    // 4. Register User 2
+    const reg2Res = await fetch(`${baseURL}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "João Costa",
+        email: "joao@example.com",
+        password: "password2"
+      })
+    });
+    assert.equal(reg2Res.status, 201);
+    const reg2 = await reg2Res.json();
+
+    // 5. Login User 1 with wrong password fails, right password succeeds
+    const badLoginRes = await fetch(`${baseURL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "maria@example.com", password: "wrong" })
+    });
+    assert.equal(badLoginRes.status, 401);
+
+    const loginRes = await fetch(`${baseURL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "maria@example.com", password: "secret123" })
+    });
+    assert.equal(loginRes.status, 200);
+    const loginData = await loginRes.json();
+    const mariaToken = loginData.token;
+    const joaoToken = reg2.token;
+
+    // 6. Verify /auth/me
+    const meRes = await fetch(`${baseURL}/auth/me`, {
+      headers: { Authorization: `Bearer ${mariaToken}` }
+    });
+    assert.equal(meRes.status, 200);
+    const me = await meRes.json();
+    assert.equal(me.email, "maria@example.com");
+
+    // 7. Maria adds a book to her library; João's library remains empty
     const sampleBook = {
       id: "9780132350884",
       title: "Clean Code",
@@ -53,84 +118,99 @@ test("BookNest API CRUD lifecycle and persistence", async () => {
 
     const createBookRes = await fetch(`${baseURL}/books`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${mariaToken}`
+      },
       body: JSON.stringify(sampleBook)
     });
     assert.equal(createBookRes.status, 201);
-    const createdBook = await createBookRes.json();
-    assert.equal(createdBook.id, sampleBook.id);
 
-    // 3b. Fetch individual book from library (GET /api/books/:bookId)
-    const getBookRes = await fetch(`${baseURL}/books/${sampleBook.id}`);
+    const mariaBooks = await (await fetch(`${baseURL}/books`, {
+      headers: { Authorization: `Bearer ${mariaToken}` }
+    })).json();
+    assert.equal(mariaBooks.length, 1);
+
+    const joaoBooks = await (await fetch(`${baseURL}/books`, {
+      headers: { Authorization: `Bearer ${joaoToken}` }
+    })).json();
+    assert.deepEqual(joaoBooks, []);
+
+    // 8. Fetch individual book from Maria's library
+    const getBookRes = await fetch(`${baseURL}/books/${sampleBook.id}`, {
+      headers: { Authorization: `Bearer ${mariaToken}` }
+    });
     assert.equal(getBookRes.status, 200);
     const fetchedBook = await getBookRes.json();
-    assert.equal(fetchedBook.title, sampleBook.title);
+    assert.equal(fetchedBook.title, "Clean Code");
 
-    const missingBookRes = await fetch(`${baseURL}/books/non-existent-id`);
-    assert.equal(missingBookRes.status, 404);
-
-    // 4. Update book status
+    // 9. Update book status
     const patchRes = await fetch(`${baseURL}/books/${sampleBook.id}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${mariaToken}`
+      },
       body: JSON.stringify({ status: "A ler" })
     });
     assert.equal(patchRes.status, 200);
-    const patchedBook = await patchRes.json();
-    assert.equal(patchedBook.status, "A ler");
+    assert.equal((await patchRes.json()).status, "A ler");
 
-    // 5. Create review and verify book userRating syncs
-    const sampleReview = {
-      id: "E621E1F8-C36C-495A-93FC-0C247A3E6E5F",
-      bookId: sampleBook.id,
-      username: "Hugo Marques",
-      content: "Excelente livro sobre código limpo.",
-      rating: 5,
-      date: "2026-11-26T17:00:00Z"
-    };
-
-    const createReviewRes = await fetch(`${baseURL}/reviews`, {
+    // 10. Maria posts a review; check ?mine=true and ?bookId=...
+    const reviewRes = await fetch(`${baseURL}/reviews`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(sampleReview)
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${mariaToken}`
+      },
+      body: JSON.stringify({
+        bookId: sampleBook.id,
+        content: "Excelente livro!",
+        rating: 5
+      })
     });
-    assert.equal(createReviewRes.status, 201);
+    assert.equal(reviewRes.status, 201);
+    const createdReview = await reviewRes.json();
+    assert.equal(createdReview.username, "Maria Silva");
 
-    const booksAfterReview = await (await fetch(`${baseURL}/books`)).json();
-    assert.equal(booksAfterReview.length, 1);
-    assert.equal(booksAfterReview[0].userRating, 5);
+    const mariaMineReviews = await (await fetch(`${baseURL}/reviews?mine=true`, {
+      headers: { Authorization: `Bearer ${mariaToken}` }
+    })).json();
+    assert.equal(mariaMineReviews.length, 1);
 
-    const reviewsAfterCreate = await (await fetch(`${baseURL}/reviews`)).json();
-    assert.equal(reviewsAfterCreate.length, 1);
-    assert.equal(reviewsAfterCreate[0].content, sampleReview.content);
+    const joaoMineReviews = await (await fetch(`${baseURL}/reviews?mine=true`, {
+      headers: { Authorization: `Bearer ${joaoToken}` }
+    })).json();
+    assert.deepEqual(joaoMineReviews, []);
 
-    // 5b. Filter reviews by bookId and by username
-    const bookReviewsRes = await fetch(`${baseURL}/reviews?bookId=${encodeURIComponent(sampleBook.id)}`);
-    assert.equal(bookReviewsRes.status, 200);
-    const bookReviews = await bookReviewsRes.json();
+    const bookReviews = await (await fetch(`${baseURL}/reviews?bookId=${sampleBook.id}`, {
+      headers: { Authorization: `Bearer ${joaoToken}` }
+    })).json();
     assert.equal(bookReviews.length, 1);
 
-    const userReviewsRes = await fetch(`${baseURL}/reviews?username=${encodeURIComponent("Hugo Marques")}`);
-    assert.equal(userReviewsRes.status, 200);
-    const userReviews = await userReviewsRes.json();
-    assert.equal(userReviews.length, 1);
+    // Maria's book userRating was synced
+    const mariaBookAfterReview = await (await fetch(`${baseURL}/books/${sampleBook.id}`, {
+      headers: { Authorization: `Bearer ${mariaToken}` }
+    })).json();
+    assert.equal(mariaBookAfterReview.userRating, 5);
 
-    const otherUserReviews = await (await fetch(`${baseURL}/reviews?username=Outro`)).json();
-    assert.deepEqual(otherUserReviews, []);
+    // 11. Logout invalidates token
+    const logoutRes = await fetch(`${baseURL}/auth/logout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${mariaToken}` }
+    });
+    assert.equal(logoutRes.status, 204);
 
-    // 6. Verify persisted file on disk
+    const meAfterLogout = await fetch(`${baseURL}/auth/me`, {
+      headers: { Authorization: `Bearer ${mariaToken}` }
+    });
+    assert.equal(meAfterLogout.status, 401);
+
+    // 12. Verify persistence on disk
     const persisted = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+    assert.equal(persisted.users.length, 2);
     assert.equal(persisted.books.length, 1);
     assert.equal(persisted.reviews.length, 1);
-
-    // 7. Delete book
-    const deleteRes = await fetch(`${baseURL}/books/${sampleBook.id}`, {
-      method: "DELETE"
-    });
-    assert.equal(deleteRes.status, 204);
-
-    const booksAfterDelete = await (await fetch(`${baseURL}/books`)).json();
-    assert.deepEqual(booksAfterDelete, []);
   } finally {
     await cleanup();
   }

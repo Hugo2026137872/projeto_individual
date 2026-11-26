@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,18 +27,22 @@ function loadDatabase(dbPath) {
     fs.mkdirSync(dir, { recursive: true });
   }
   if (!fs.existsSync(dbPath)) {
-    const initial = { books: [], reviews: [] };
+    const initial = { users: [], sessions: {}, books: [], reviews: [] };
     fs.writeFileSync(dbPath, JSON.stringify(initial, null, 2), "utf8");
     return initial;
   }
 
   const raw = fs.readFileSync(dbPath, "utf8");
   if (!raw.trim()) {
-    return { books: [], reviews: [] };
+    return { users: [], sessions: {}, books: [], reviews: [] };
   }
 
   const parsed = JSON.parse(raw);
   return {
+    users: Array.isArray(parsed.users) ? parsed.users : [],
+    sessions: parsed.sessions && typeof parsed.sessions === "object" && !Array.isArray(parsed.sessions)
+      ? parsed.sessions
+      : {},
     books: Array.isArray(parsed.books) ? parsed.books : [],
     reviews: Array.isArray(parsed.reviews) ? parsed.reviews : []
   };
@@ -62,7 +67,7 @@ function sendJSON(res, statusCode, payload) {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Headers": "Content-Type, Authorization"
   });
   res.end(body);
 }
@@ -71,7 +76,7 @@ function sendNoContent(res) {
   res.writeHead(204, {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Headers": "Content-Type, Authorization"
   });
   res.end();
 }
@@ -109,7 +114,60 @@ function readRequestBody(req) {
   });
 }
 
-function normalizeBook(input) {
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const parts = String(storedHash || "").split(":");
+  if (parts.length !== 2) return false;
+  const [salt, originalHex] = parts;
+  const candidate = crypto.scryptSync(password, salt, 64);
+  const original = Buffer.from(originalHex, "hex");
+  if (candidate.length !== original.length) return false;
+  return crypto.timingSafeEqual(candidate, original);
+}
+
+function sanitizeUser(user) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email
+  };
+}
+
+function sanitizeBook(book) {
+  return {
+    id: book.id,
+    title: book.title,
+    authors: book.authors,
+    isbn: book.isbn,
+    coverURL: book.coverURL,
+    status: book.status,
+    userRating: book.userRating
+  };
+}
+
+function extractBearerToken(req) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+  const token = authHeader.slice("Bearer ".length).trim();
+  return token || null;
+}
+
+function getAuthenticatedUser(req, db) {
+  const token = extractBearerToken(req);
+  if (!token) return null;
+  const userId = db.sessions[token];
+  if (!userId) return null;
+  return db.users.find((u) => u.id === userId) || null;
+}
+
+function normalizeBook(input, userId) {
   if (!input || typeof input.id !== "string" || !input.id.trim()) {
     return { error: "Field 'id' is required and must be a non-empty string." };
   }
@@ -130,6 +188,7 @@ function normalizeBook(input) {
 
   return {
     book: {
+      userId,
       id: input.id,
       title: input.title,
       authors,
@@ -141,7 +200,7 @@ function normalizeBook(input) {
   };
 }
 
-function normalizeReview(input) {
+function normalizeReview(input, user) {
   if (!input || typeof input.bookId !== "string" || !input.bookId.trim()) {
     return { error: "Field 'bookId' is required." };
   }
@@ -157,7 +216,6 @@ function normalizeReview(input) {
   if (typeof input.date === "string" && !Number.isNaN(Date.parse(input.date))) {
     isoDate = new Date(input.date).toISOString();
   } else if (typeof input.date === "number" && Number.isFinite(input.date)) {
-    // Support Apple Reference Date (seconds since 2001-01-01) if sent without ISO8601
     const appleEpochOffsetMs = Date.UTC(2001, 0, 1, 0, 0, 0);
     isoDate = new Date(appleEpochOffsetMs + input.date * 1000).toISOString();
   }
@@ -165,10 +223,9 @@ function normalizeReview(input) {
   return {
     review: {
       id: typeof input.id === "string" && input.id.trim() ? input.id : crypto.randomUUID(),
+      userId: user.id,
       bookId: input.bookId,
-      username: typeof input.username === "string" && input.username.trim()
-        ? input.username
-        : "Utilizador",
+      username: user.name,
       content: input.content,
       rating,
       date: isoDate
@@ -199,42 +256,160 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
         const db = loadDatabase(dbPath);
         sendJSON(res, 200, {
           status: "ok",
+          usersCount: db.users.length,
           booksCount: db.books.length,
           reviewsCount: db.reviews.length
         });
         return;
       }
 
-      // GET /api/books
-      if (method === "GET" && pathname === "/api/books") {
+      // POST /api/auth/register
+      if (method === "POST" && pathname === "/api/auth/register") {
+        const body = await readRequestBody(req);
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+        const password = typeof body.password === "string" ? body.password : "";
+
+        if (!name) {
+          sendJSON(res, 400, { error: "O nome é obrigatório." });
+          return;
+        }
+        if (!email || !email.includes("@")) {
+          sendJSON(res, 400, { error: "Indica um email válido." });
+          return;
+        }
+        if (password.length < 4) {
+          sendJSON(res, 400, { error: "A palavra-passe deve ter pelo menos 4 caracteres." });
+          return;
+        }
+
         const db = loadDatabase(dbPath);
-        sendJSON(res, 200, db.books);
+        if (db.users.some((u) => u.email.toLowerCase() === email)) {
+          sendJSON(res, 409, { error: "Já existe uma conta registada com este email." });
+          return;
+        }
+
+        const newUser = {
+          id: crypto.randomUUID(),
+          name,
+          email,
+          passwordHash: hashPassword(password),
+          createdAt: new Date().toISOString()
+        };
+        const token = crypto.randomBytes(32).toString("hex");
+        db.users.push(newUser);
+        db.sessions[token] = newUser.id;
+        saveDatabase(dbPath, db);
+
+        sendJSON(res, 201, { token, user: sanitizeUser(newUser) });
         return;
       }
 
-      // POST /api/books
-      if (method === "POST" && pathname === "/api/books") {
+      // POST /api/auth/login
+      if (method === "POST" && pathname === "/api/auth/login") {
         const body = await readRequestBody(req);
-        const { book, error } = normalizeBook(body);
+        const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+        const password = typeof body.password === "string" ? body.password : "";
+
+        if (!email || !password) {
+          sendJSON(res, 400, { error: "Email e palavra-passe são obrigatórios." });
+          return;
+        }
+
+        const db = loadDatabase(dbPath);
+        const user = db.users.find((u) => u.email.toLowerCase() === email);
+        if (!user || !verifyPassword(password, user.passwordHash)) {
+          sendJSON(res, 401, { error: "Email ou palavra-passe inválidos." });
+          return;
+        }
+
+        const token = crypto.randomBytes(32).toString("hex");
+        db.sessions[token] = user.id;
+        saveDatabase(dbPath, db);
+
+        sendJSON(res, 200, { token, user: sanitizeUser(user) });
+        return;
+      }
+
+      // POST /api/auth/logout
+      if (method === "POST" && pathname === "/api/auth/logout") {
+        const token = extractBearerToken(req);
+        if (token) {
+          const db = loadDatabase(dbPath);
+          if (db.sessions[token]) {
+            delete db.sessions[token];
+            saveDatabase(dbPath, db);
+          }
+        }
+        sendNoContent(res);
+        return;
+      }
+
+      // GET /api/auth/me
+      if (method === "GET" && pathname === "/api/auth/me") {
+        const db = loadDatabase(dbPath);
+        const user = getAuthenticatedUser(req, db);
+        if (!user) {
+          sendJSON(res, 401, { error: "Sessão inválida ou expirada." });
+          return;
+        }
+        sendJSON(res, 200, sanitizeUser(user));
+        return;
+      }
+
+      // GET /api/books (authenticated user's library)
+      if (method === "GET" && pathname === "/api/books") {
+        const db = loadDatabase(dbPath);
+        const user = getAuthenticatedUser(req, db);
+        if (!user) {
+          sendJSON(res, 401, { error: "Autenticação necessária." });
+          return;
+        }
+        const userBooks = db.books
+          .filter((b) => b.userId === user.id)
+          .map(sanitizeBook);
+        sendJSON(res, 200, userBooks);
+        return;
+      }
+
+      // POST /api/books (add book to authenticated user's library)
+      if (method === "POST" && pathname === "/api/books") {
+        const db = loadDatabase(dbPath);
+        const user = getAuthenticatedUser(req, db);
+        if (!user) {
+          sendJSON(res, 401, { error: "Autenticação necessária." });
+          return;
+        }
+
+        const body = await readRequestBody(req);
+        const { book, error } = normalizeBook(body, user.id);
         if (error) {
           sendJSON(res, 400, { error });
           return;
         }
 
-        const db = loadDatabase(dbPath);
-        const existingIndex = db.books.findIndex((b) => b.id === book.id);
+        const existingIndex = db.books.findIndex(
+          (b) => b.userId === user.id && b.id === book.id
+        );
         if (existingIndex === -1) {
           db.books.push(book);
           saveDatabase(dbPath, db);
-          sendJSON(res, 201, book);
+          sendJSON(res, 201, sanitizeBook(book));
         } else {
-          sendJSON(res, 200, db.books[existingIndex]);
+          sendJSON(res, 200, sanitizeBook(db.books[existingIndex]));
         }
         return;
       }
 
       // GET, PATCH, or DELETE /api/books/:bookId
       if (pathname.startsWith("/api/books/")) {
+        const db = loadDatabase(dbPath);
+        const user = getAuthenticatedUser(req, db);
+        if (!user) {
+          sendJSON(res, 401, { error: "Autenticação necessária." });
+          return;
+        }
+
         const encodedId = pathname.slice("/api/books/".length);
         const bookId = decodeURIComponent(encodedId);
         if (!bookId) {
@@ -242,15 +417,16 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
           return;
         }
 
-        const db = loadDatabase(dbPath);
-        const bookIndex = db.books.findIndex((b) => b.id === bookId);
+        const bookIndex = db.books.findIndex(
+          (b) => b.userId === user.id && b.id === bookId
+        );
 
         if (method === "GET") {
           if (bookIndex === -1) {
             sendJSON(res, 404, { error: "Book not found." });
             return;
           }
-          sendJSON(res, 200, db.books[bookIndex]);
+          sendJSON(res, 200, sanitizeBook(db.books[bookIndex]));
           return;
         }
 
@@ -280,7 +456,7 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
           }
 
           saveDatabase(dbPath, db);
-          sendJSON(res, 200, db.books[bookIndex]);
+          sendJSON(res, 200, sanitizeBook(db.books[bookIndex]));
           return;
         }
 
@@ -296,13 +472,23 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
         }
       }
 
-      // GET /api/reviews (optional ?bookId=... and/or ?username=...)
+      // GET /api/reviews (optional ?bookId=..., ?username=..., or ?mine=true)
       if (method === "GET" && pathname === "/api/reviews") {
         const db = loadDatabase(dbPath);
+        const user = getAuthenticatedUser(req, db);
+        if (!user) {
+          sendJSON(res, 401, { error: "Autenticação necessária." });
+          return;
+        }
+
         const bookIdFilter = requestUrl.searchParams.get("bookId");
         const usernameFilter = requestUrl.searchParams.get("username");
+        const mineFilter = requestUrl.searchParams.get("mine");
 
         let reviews = db.reviews;
+        if (mineFilter === "true" || mineFilter === "1") {
+          reviews = reviews.filter((r) => r.userId === user.id);
+        }
         if (bookIdFilter) {
           reviews = reviews.filter((r) => r.bookId === bookIdFilter);
         }
@@ -317,18 +503,26 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
 
       // POST /api/reviews
       if (method === "POST" && pathname === "/api/reviews") {
+        const db = loadDatabase(dbPath);
+        const user = getAuthenticatedUser(req, db);
+        if (!user) {
+          sendJSON(res, 401, { error: "Autenticação necessária." });
+          return;
+        }
+
         const body = await readRequestBody(req);
-        const { review, error } = normalizeReview(body);
+        const { review, error } = normalizeReview(body, user);
         if (error) {
           sendJSON(res, 400, { error });
           return;
         }
 
-        const db = loadDatabase(dbPath);
         db.reviews.unshift(review);
 
-        // Keep book's userRating synchronized when a review is added
-        const bookIndex = db.books.findIndex((b) => b.id === review.bookId);
+        // Keep authenticated user's book userRating synchronized
+        const bookIndex = db.books.findIndex(
+          (b) => b.userId === user.id && b.id === review.bookId
+        );
         if (bookIndex !== -1) {
           db.books[bookIndex].userRating = review.rating;
         }
