@@ -285,7 +285,6 @@ struct InicioView: View {
                 }
             }
         }
-        .id(libraryManager.navigationResetID)
     }
 }
 
@@ -396,7 +395,6 @@ struct PesquisarView: View {
                 BookDetailView(book: livro)
             }
         }
-        .id(libraryManager.navigationResetID)
     }
     
     @MainActor
@@ -526,7 +524,6 @@ struct RecomendacoesView: View {
                 }
             }
         }
-        .id(libraryManager.navigationResetID)
     }
     
     @MainActor
@@ -667,7 +664,6 @@ struct BibliotecaView: View {
                 await libraryManager.refreshBooks()
             }
         }
-        .id(libraryManager.navigationResetID)
     }
 }
 
@@ -806,6 +802,14 @@ struct LibraryBookDetailView: View {
 }
 
 // MARK: - Aba 5: Perfil
+private enum ProfileDestination: Hashable {
+    case reviews
+    case likes
+    case settings
+    case aiModel
+    case dataManagement
+}
+
 struct PerfilView: View {
     @EnvironmentObject var libraryManager: LibraryManager
     
@@ -836,25 +840,25 @@ struct PerfilView: View {
                         Label("A minha biblioteca", systemImage: "book")
                             .foregroundColor(.primary)
                     }
-                    NavigationLink(destination: MyReviewsListView()) {
+                    NavigationLink(value: ProfileDestination.reviews) {
                         Label("As minhas avaliações", systemImage: "star")
                     }
-                    NavigationLink(destination: Text("Os meus gostos")) {
+                    NavigationLink(value: ProfileDestination.likes) {
                         Label("Os meus gostos", systemImage: "heart")
                     }
-                    NavigationLink(destination: SettingsView()) {
+                    NavigationLink(value: ProfileDestination.settings) {
                         Label("Definições", systemImage: "gearshape")
                     }
                 }
                 
                 Section(header: Text("Modelo de IA")) {
-                    NavigationLink(destination: Text("Gemma 4 (Ollama Local)")) {
+                    NavigationLink(value: ProfileDestination.aiModel) {
                         Label("Gemma 4 (Ollama)", systemImage: "cpu")
                     }
                 }
                 
                 Section(header: Text("Privacidade")) {
-                    NavigationLink(destination: Text("Gestão de dados")) {
+                    NavigationLink(value: ProfileDestination.dataManagement) {
                         Label("Gestão de dados", systemImage: "lock.shield")
                     }
                 }
@@ -871,7 +875,20 @@ struct PerfilView: View {
             .navigationTitle("Perfil")
             .navigationBarTitleDisplayMode(.large)
         }
-        .id(libraryManager.navigationResetID)
+        .navigationDestination(for: ProfileDestination.self) { destination in
+            switch destination {
+            case .reviews:
+                MyReviewsListView()
+            case .likes:
+                Text("Os meus gostos")
+            case .settings:
+                SettingsView()
+            case .aiModel:
+                Text("Gemma 4 (Ollama Local)")
+            case .dataManagement:
+                Text("Gestão de dados")
+            }
+        }
     }
 }
 
