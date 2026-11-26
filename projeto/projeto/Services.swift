@@ -46,14 +46,15 @@ class OpenLibraryService {
                 let title = doc["title"] as? String ?? "Título Desconhecido"
                 let authors = doc["author_name"] as? [String] ?? ["Autor Desconhecido"]
                 let isbns = doc["isbn"] as? [String] ?? []
-                let firstIsbn = isbns.first ?? UUID().uuidString
+                let workKey = (doc["key"] as? String)?.replacingOccurrences(of: "/works/", with: "")
+                let firstIsbn = isbns.first ?? workKey ?? UUID().uuidString
                 
                 var coverURL: URL? = nil
                 if let coverId = doc["cover_i"] as? Int {
                     coverURL = URL(string: "https://covers.openlibrary.org/b/id/\(coverId)-M.jpg")
                 }
                 
-                return Book(id: firstIsbn, title: title, authors: authors, isbn: firstIsbn, coverURL: coverURL)
+                return Book(id: firstIsbn, title: title, authors: authors, isbn: isbns.first ?? "", coverURL: coverURL)
             }
         }
         return []
@@ -323,9 +324,15 @@ protocol BookRepository {
     func deleteBook(bookId: String) async throws
     
     func fetchReviews() async throws -> [Review]
-    func fetchReviews(bookId: String) async throws -> [Review]
+    func fetchReviews(bookId: String, bookTitle: String?) async throws -> [Review]
     func fetchUserReviews() async throws -> [Review]
     func saveReview(_ review: Review) async throws
+}
+
+extension BookRepository {
+    func fetchReviews(bookId: String) async throws -> [Review] {
+        try await fetchReviews(bookId: bookId, bookTitle: nil)
+    }
 }
 
 class LocalBookRepository: BookRepository {
@@ -375,9 +382,18 @@ class LocalBookRepository: BookRepository {
         return (try? JSONDecoder().decode([Review].self, from: data)) ?? []
     }
     
-    func fetchReviews(bookId: String) async throws -> [Review] {
+    func fetchReviews(bookId: String, bookTitle: String?) async throws -> [Review] {
         let reviews = try await fetchReviews()
-        return reviews.filter { $0.bookId == bookId }
+        let normalizedTitle = bookTitle?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return reviews.filter { review in
+            if review.bookId == bookId { return true }
+            if let normalizedTitle, !normalizedTitle.isEmpty,
+               let reviewTitle = review.bookTitle?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               reviewTitle == normalizedTitle {
+                return true
+            }
+            return false
+        }
     }
     
     func fetchUserReviews() async throws -> [Review] {
@@ -519,10 +535,14 @@ class RemoteBookRepository: BookRepository {
         return try makeDecoder().decode([Review].self, from: data)
     }
     
-    func fetchReviews(bookId: String) async throws -> [Review] {
+    func fetchReviews(bookId: String, bookTitle: String?) async throws -> [Review] {
+        var queryItems = [URLQueryItem(name: "bookId", value: bookId)]
+        if let bookTitle, !bookTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "title", value: bookTitle))
+        }
         let url = try makeURL(
             pathComponents: ["reviews"],
-            queryItems: [URLQueryItem(name: "bookId", value: bookId)]
+            queryItems: queryItems
         )
         let (data, response) = try await URLSession.shared.data(for: makeRequest(url: url, method: "GET"))
         try validateResponse(response, data: data)
@@ -677,14 +697,14 @@ class LibraryManager: ObservableObject {
         isLoadingData = false
     }
     
-    func refreshBookDetails(bookId: String) async {
+    func refreshBookDetails(book: Book) async {
         guard isAuthenticated else { return }
         do {
-            async let fetchedBook = repository.fetchBook(bookId: bookId)
-            async let fetchedReviews = repository.fetchReviews(bookId: bookId)
+            async let fetchedBook = repository.fetchBook(bookId: book.id)
+            async let fetchedReviews = repository.fetchReviews(bookId: book.id, bookTitle: book.title)
             
             if let updatedBook = try await fetchedBook {
-                if let index = books.firstIndex(where: { $0.id == bookId }) {
+                if let index = books.firstIndex(where: { $0.id == book.id }) {
                     books[index] = updatedBook
                 } else {
                     books.append(updatedBook)
@@ -692,8 +712,7 @@ class LibraryManager: ObservableObject {
             }
             
             let bookReviews = try await fetchedReviews
-            reviews.removeAll { $0.bookId == bookId }
-            reviews.insert(contentsOf: bookReviews, at: 0)
+            mergeBookReviews(bookReviews, for: book)
             errorMessage = nil
         } catch RepositoryError.unauthorized {
             clearLocalSession()
@@ -702,18 +721,35 @@ class LibraryManager: ObservableObject {
         }
     }
     
-    func refreshReviewsForBook(bookId: String) async {
-        guard isAuthenticated else { return }
+    func fetchReviewsForBook(_ book: Book) async -> [Review] {
+        guard isAuthenticated else { return reviewsFor(book: book) }
         do {
-            let bookReviews = try await repository.fetchReviews(bookId: bookId)
-            reviews.removeAll { $0.bookId == bookId }
-            reviews.insert(contentsOf: bookReviews, at: 0)
+            let bookReviews = try await repository.fetchReviews(bookId: book.id, bookTitle: book.title)
+            mergeBookReviews(bookReviews, for: book)
             errorMessage = nil
+            return bookReviews
         } catch RepositoryError.unauthorized {
             clearLocalSession()
+            return []
         } catch {
             self.errorMessage = "Erro ao carregar críticas: \(error.localizedDescription)"
+            return reviewsFor(book: book)
         }
+    }
+    
+    private func mergeBookReviews(_ fetched: [Review], for book: Book) {
+        let fetchedIds = Set(fetched.map(\.id))
+        reviews.removeAll { review in
+            fetchedIds.contains(review.id) || matchesBook(review, book: book)
+        }
+        reviews.insert(contentsOf: fetched, at: 0)
+    }
+    
+    private func matchesBook(_ review: Review, book: Book) -> Bool {
+        if review.bookId == book.id { return true }
+        let targetTitle = book.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let reviewTitle = review.bookTitle?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return !targetTitle.isEmpty && !reviewTitle.isEmpty && reviewTitle == targetTitle
     }
     
     func refreshUserReviews() async {
@@ -782,9 +818,15 @@ class LibraryManager: ObservableObject {
         }
     }
     
-    func addReview(bookId: String, content: String, rating: Int) {
+    func addReview(bookId: String, bookTitle: String? = nil, content: String, rating: Int) {
         let authorName = currentUser?.name ?? "Utilizador"
-        let newReview = Review(bookId: bookId, username: authorName, content: content, rating: rating)
+        let newReview = Review(
+            bookId: bookId,
+            bookTitle: bookTitle,
+            username: authorName,
+            content: content,
+            rating: rating
+        )
         reviews.insert(newReview, at: 0)
         userReviews.insert(newReview, at: 0)
         
@@ -806,5 +848,9 @@ class LibraryManager: ObservableObject {
     
     func reviewsFor(bookId: String) -> [Review] {
         reviews.filter { $0.bookId == bookId }
+    }
+    
+    func reviewsFor(book: Book) -> [Review] {
+        reviews.filter { matchesBook($0, book: book) }
     }
 }

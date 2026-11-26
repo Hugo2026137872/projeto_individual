@@ -135,7 +135,7 @@ struct AuthView: View {
                 }
                 .padding()
             }
-            .navigationBarTitleDisplayMode(.hidden)
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showingServerSettings) {
                 NavigationStack {
                     SettingsView()
@@ -770,7 +770,7 @@ struct LibraryBookDetailView: View {
                 .background(Color(UIColor.secondarySystemBackground))
                 .cornerRadius(12)
                 
-                let bookReviews = libraryManager.reviewsFor(bookId: currentBook.id)
+                let bookReviews = libraryManager.reviewsFor(book: currentBook)
                 if !bookReviews.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Avaliações e críticas (\(bookReviews.count))")
@@ -787,7 +787,7 @@ struct LibraryBookDetailView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .task(id: book.id) {
-            await libraryManager.refreshBookDetails(bookId: book.id)
+            await libraryManager.refreshBookDetails(book: currentBook)
         }
     }
     
@@ -1078,10 +1078,18 @@ struct BookDetailView: View {
     var book: Book
     
     @State private var mostrarSucesso = false
+    @State private var bookReviews: [Review] = []
+    @State private var isLoadingReviews = false
     @Environment(\.dismiss) var dismiss
     
     var livroJaAdicionado: Bool {
         libraryManager.books.contains(where: { $0.id == book.id })
+    }
+    
+    private var averageRating: Double? {
+        guard !bookReviews.isEmpty else { return nil }
+        let total = bookReviews.reduce(0) { $0 + $1.rating }
+        return Double(total) / Double(bookReviews.count)
     }
     
     var body: some View {
@@ -1106,9 +1114,24 @@ struct BookDetailView: View {
                     .foregroundColor(.secondary)
                 
                 HStack(spacing: 4) {
-                    ForEach(0..<4) { _ in Image(systemName: "star.fill").foregroundColor(.yellow) }
-                    Image(systemName: "star.fill").foregroundColor(.gray.opacity(0.5))
-                    Text("4.5 (1.234)").foregroundColor(.secondary).font(.subheadline)
+                    if let averageRating {
+                        let filledStars = Int(averageRating.rounded())
+                        ForEach(1...5, id: \.self) { star in
+                            Image(systemName: "star.fill")
+                                .foregroundColor(star <= filledStars ? .yellow : .gray.opacity(0.4))
+                        }
+                        Text(String(format: "%.1f (%d)", averageRating, bookReviews.count))
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                    } else {
+                        ForEach(1...5, id: \.self) { _ in
+                            Image(systemName: "star")
+                                .foregroundColor(.gray.opacity(0.5))
+                        }
+                        Text("Sem avaliações")
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                    }
                 }
                 
                 VStack(alignment: .leading, spacing: 8) {
@@ -1122,7 +1145,7 @@ struct BookDetailView: View {
                 
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("Avaliações e críticas")
+                        Text("Avaliações e críticas (\(bookReviews.count))")
                             .font(.headline)
                         Spacer()
                         NavigationLink(destination: WriteReviewView(book: book)) {
@@ -1132,8 +1155,14 @@ struct BookDetailView: View {
                         }
                     }
                     
-                    let bookReviews = libraryManager.reviewsFor(bookId: book.id)
-                    if bookReviews.isEmpty {
+                    if isLoadingReviews && bookReviews.isEmpty {
+                        HStack {
+                            Spacer()
+                            ProgressView("A carregar críticas...")
+                            Spacer()
+                        }
+                        .padding(.vertical, 8)
+                    } else if bookReviews.isEmpty {
                         Text("Ainda não existem críticas para este livro. Sê o primeiro a avaliar!")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -1176,11 +1205,21 @@ struct BookDetailView: View {
         .navigationTitle("Detalhes")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: book.id) {
-            await libraryManager.refreshReviewsForBook(bookId: book.id)
+            await loadBookReviews()
+        }
+        .onAppear {
+            Task { await loadBookReviews() }
         }
         .fullScreenCover(isPresented: $mostrarSucesso) {
             EcraSucessoView(tituloLivro: book.title)
         }
+    }
+    
+    @MainActor
+    private func loadBookReviews() async {
+        isLoadingReviews = true
+        bookReviews = await libraryManager.fetchReviewsForBook(book)
+        isLoadingReviews = false
     }
 }
 
@@ -1338,7 +1377,7 @@ struct WriteReviewView: View {
                 
                 Button(action: {
                     let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-                    libraryManager.addReview(bookId: book.id, content: trimmed, rating: rating)
+                    libraryManager.addReview(bookId: book.id, bookTitle: book.title, content: trimmed, rating: rating)
                     dismiss()
                 }) {
                     Text("Publicar")

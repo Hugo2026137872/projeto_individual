@@ -200,6 +200,13 @@ function normalizeBook(input, userId) {
   };
 }
 
+function normalizeTitle(title) {
+  return String(title || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
 function normalizeReview(input, user) {
   if (!input || typeof input.bookId !== "string" || !input.bookId.trim()) {
     return { error: "Field 'bookId' is required." };
@@ -220,11 +227,16 @@ function normalizeReview(input, user) {
     isoDate = new Date(appleEpochOffsetMs + input.date * 1000).toISOString();
   }
 
+  const bookTitle = typeof input.bookTitle === "string" && input.bookTitle.trim()
+    ? input.bookTitle.trim()
+    : null;
+
   return {
     review: {
       id: typeof input.id === "string" && input.id.trim() ? input.id : crypto.randomUUID(),
       userId: user.id,
       bookId: input.bookId,
+      bookTitle,
       username: user.name,
       content: input.content,
       rating,
@@ -472,7 +484,7 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
         }
       }
 
-      // GET /api/reviews (optional ?bookId=..., ?username=..., or ?mine=true)
+      // GET /api/reviews (optional ?bookId=..., ?title=..., ?username=..., or ?mine=true)
       if (method === "GET" && pathname === "/api/reviews") {
         const db = loadDatabase(dbPath);
         const user = getAuthenticatedUser(req, db);
@@ -482,6 +494,7 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
         }
 
         const bookIdFilter = requestUrl.searchParams.get("bookId");
+        const titleFilter = requestUrl.searchParams.get("title");
         const usernameFilter = requestUrl.searchParams.get("username");
         const mineFilter = requestUrl.searchParams.get("mine");
 
@@ -489,8 +502,30 @@ export function createServer({ dbPath = DEFAULT_DB_PATH, silent = false } = {}) 
         if (mineFilter === "true" || mineFilter === "1") {
           reviews = reviews.filter((r) => r.userId === user.id);
         }
-        if (bookIdFilter) {
-          reviews = reviews.filter((r) => r.bookId === bookIdFilter);
+        if (bookIdFilter || titleFilter) {
+          const normalizedTargetTitle = titleFilter ? normalizeTitle(titleFilter) : "";
+          const bookIdsWithTitle = normalizedTargetTitle
+            ? new Set(
+                db.books
+                  .filter((b) => normalizeTitle(b.title) === normalizedTargetTitle)
+                  .map((b) => b.id)
+              )
+            : new Set();
+
+          reviews = reviews.filter((r) => {
+            if (bookIdFilter && r.bookId === bookIdFilter) {
+              return true;
+            }
+            if (normalizedTargetTitle) {
+              if (r.bookTitle && normalizeTitle(r.bookTitle) === normalizedTargetTitle) {
+                return true;
+              }
+              if (bookIdsWithTitle.has(r.bookId)) {
+                return true;
+              }
+            }
+            return false;
+          });
         }
         if (usernameFilter) {
           reviews = reviews.filter(

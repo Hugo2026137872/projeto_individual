@@ -165,6 +165,7 @@ test("BookNest auth, multi-user library isolation, and reviews", async () => {
       },
       body: JSON.stringify({
         bookId: sampleBook.id,
+        bookTitle: sampleBook.title,
         content: "Excelente livro!",
         rating: 5
       })
@@ -172,6 +173,7 @@ test("BookNest auth, multi-user library isolation, and reviews", async () => {
     assert.equal(reviewRes.status, 201);
     const createdReview = await reviewRes.json();
     assert.equal(createdReview.username, "Maria Silva");
+    assert.equal(createdReview.bookTitle, "Clean Code");
 
     const mariaMineReviews = await (await fetch(`${baseURL}/reviews?mine=true`, {
       headers: { Authorization: `Bearer ${mariaToken}` }
@@ -187,6 +189,15 @@ test("BookNest auth, multi-user library isolation, and reviews", async () => {
       headers: { Authorization: `Bearer ${joaoToken}` }
     })).json();
     assert.equal(bookReviews.length, 1);
+
+    // Another user searching by a different edition ISBN / work key still gets Maria's review via title
+    const crossEditionReviews = await (
+      await fetch(`${baseURL}/reviews?bookId=OL15398867W&title=${encodeURIComponent("Clean Code")}`, {
+        headers: { Authorization: `Bearer ${joaoToken}` }
+      })
+    ).json();
+    assert.equal(crossEditionReviews.length, 1);
+    assert.equal(crossEditionReviews[0].username, "Maria Silva");
 
     // Maria's book userRating was synced
     const mariaBookAfterReview = await (await fetch(`${baseURL}/books/${sampleBook.id}`, {
